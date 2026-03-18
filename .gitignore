@@ -361,3 +361,13 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Project-specific additions
+# Ignore runtime config, logs, and single-file publish outputs
+MonitorSwitcher/config.json
+monitor-switcher.log
+.env
+*.exe
+*.dll
+publish/
+bin/**/publish/
