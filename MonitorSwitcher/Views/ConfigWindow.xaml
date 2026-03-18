@@ -1,0 +1,119 @@
+<Window x:Class="MonitorSwitcher.Views.ConfigWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Configure Monitors — Monitor Input Switcher"
+        Width="500" Height="500"
+        MinWidth="460" MinHeight="350"
+        ResizeMode="CanResize"
+        WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="12">
+        <!-- Footer buttons — always visible at bottom -->
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Cancel" Padding="16,6" Margin="0,0,8,0"
+                    Click="Cancel_Click"/>
+            <Button Content="Save" Padding="16,6"
+                    Click="Save_Click"/>
+        </StackPanel>
+
+        <!-- Monitor list — scrollable -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="MonitorList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border BorderBrush="#DDDDDD" BorderThickness="1"
+                                CornerRadius="4" Margin="0,0,0,10" Padding="10">
+                            <StackPanel>
+                                <!-- Monitor header -->
+                                <TextBlock Text="{Binding DeviceName}"
+                                           FontSize="10" Foreground="Gray"
+                                           Margin="0,0,0,4"/>
+
+                                <!-- Display name -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Name: "
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,4,0"/>
+                                    <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
+                                             Width="300"/>
+                                </StackPanel>
+
+                                <!-- Inputs header -->
+                                <TextBlock Text="Inputs:" FontWeight="SemiBold"
+                                           Margin="0,0,0,4"/>
+
+                                <!-- Input rows -->
+                                <ItemsControl ItemsSource="{Binding Inputs}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}"
+                                                         VerticalAlignment="Center"
+                                                         Width="150" Margin="0,0,4,0"
+                                                         ToolTip="Edit label"/>
+                                                <TextBlock Text="{Binding VcpDisplay}"
+                                                           VerticalAlignment="Center"
+                                                           Width="60" Margin="0,0,6,0"
+                                                           Foreground="Gray" FontSize="11"/>
+                                                <Button Content="▲" FontSize="10"
+                                                        Tag="{Binding}"
+                                                        Click="MoveUp_Click"
+                                                        Padding="4,2" Margin="0,0,2,0"
+                                                        VerticalAlignment="Center"
+                                                        ToolTip="Move up"/>
+                                                <Button Content="▼" FontSize="10"
+                                                        Tag="{Binding}"
+                                                        Click="MoveDown_Click"
+                                                        Padding="4,2" Margin="0,0,4,0"
+                                                        VerticalAlignment="Center"
+                                                        ToolTip="Move down"/>
+                                                <Button Content="✕"
+                                                        Tag="{Binding}"
+                                                        Click="RemoveInput_Click"
+                                                        Padding="6,2"
+                                                        VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <!-- Add input — preset dropdown -->
+                                <StackPanel Orientation="Horizontal"
+                                            Margin="0,6,0,0">
+                                    <TextBlock Text="Add:" VerticalAlignment="Center"
+                                               Margin="0,0,6,0"/>
+                                    <ComboBox Tag="{Binding}"
+                                              Width="220" Margin="0,0,6,0"
+                                              DisplayMemberPath="DisplayText"
+                                              Loaded="AddInputCombo_Loaded"/>
+                                    <Button Content="+ Add"
+                                            Padding="8,2"
+                                            Click="AddPreset_Click"/>
+                                </StackPanel>
+
+                                <!-- Add input — manual VCP entry -->
+                                <StackPanel Orientation="Horizontal"
+                                            Margin="0,4,0,0">
+                                    <TextBlock Text="Manual:" VerticalAlignment="Center"
+                                               Margin="0,0,6,0" Width="42"/>
+                                    <TextBox x:Name="ManualLabel" Width="120"
+                                             Tag="{Binding}"
+                                             Margin="0,0,4,0"
+                                             ToolTip="Label (e.g. HDMI-3)"/>
+                                    <TextBox x:Name="ManualVcp" Width="50"
+                                             Tag="{Binding}"
+                                             Margin="0,0,4,0"
+                                             ToolTip="VCP value (0-255)"/>
+                                    <Button Content="+ Add"
+                                            Padding="8,2"
+                                            Click="AddManual_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

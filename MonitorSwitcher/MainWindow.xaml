@@ -1,0 +1,185 @@
+<Window x:Class="MonitorSwitcher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:converters="clr-namespace:MonitorSwitcher.Converters"
+        Title="Monitor Input Switcher"
+        Width="420" SizeToContent="Height"
+        ResizeMode="CanMinimize"
+        Topmost="{Binding IsTopMost, Mode=TwoWay}"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+
+        <!-- Input button style with proper active/inactive/disabled states -->
+        <Style x:Key="InputButtonStyle" TargetType="Button">
+            <Setter Property="MinWidth" Value="70"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Margin" Value="0,0,6,6"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="#E8E8E8"
+                                BorderBrush="#CCCCCC"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <!-- Hover -->
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#D0D0D0"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#AAAAAA"/>
+                            </Trigger>
+                            <!-- Active input -->
+                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2979FF"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#1565C0"/>
+                                <Setter Property="Foreground" Value="White"/>
+                                <Setter Property="FontWeight" Value="Bold"/>
+                            </DataTrigger>
+                            <!-- Disabled (busy) -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.6"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Stay on Top toggle button style -->
+        <Style x:Key="TopMostToggleStyle" TargetType="Button">
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="ToolTip" Value="Stay on top"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="#E8E8E8"
+                                BorderBrush="#CCCCCC"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <TextBlock x:Name="Icon" Text="📌" FontSize="13"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#D0D0D0"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsTopMost}" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2979FF"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#1565C0"/>
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <Button Command="{Binding ToggleTopMostCommand}"
+                    DockPanel.Dock="Right"
+                    Style="{StaticResource TopMostToggleStyle}"
+                    Margin="4,0,0,0"
+                    VerticalAlignment="Center"/>
+            <TextBlock Text="Monitors"
+                       FontSize="18" FontWeight="SemiBold"
+                       VerticalAlignment="Center"/>
+        </DockPanel>
+
+        <!-- Monitor cards -->
+        <ItemsControl Grid.Row="1"
+                      ItemsSource="{Binding Monitors}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border BorderBrush="#DDDDDD" BorderThickness="1"
+                            CornerRadius="6" Margin="0,0,0,8"
+                            Padding="12">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="6" ShadowDepth="1"
+                                              Opacity="0.15" Color="Black"/>
+                        </Border.Effect>
+
+                        <StackPanel>
+                            <!-- Monitor name -->
+                            <TextBlock Text="{Binding DisplayName}"
+                                       FontSize="14" FontWeight="SemiBold"
+                                       Margin="0,0,0,4"/>
+
+                            <!-- Current input -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Current input: "
+                                           Foreground="Gray"/>
+                                <TextBlock Text="{Binding CurrentInputLabel}"
+                                           FontWeight="Medium"/>
+                            </StackPanel>
+
+                            <!-- Busy indicator -->
+                            <TextBlock Text="⏳ Working..."
+                                       FontStyle="Italic" Foreground="#FF6600"
+                                       Margin="0,0,0,4"
+                                       Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}"/>
+
+                            <!-- Input buttons -->
+                            <ItemsControl ItemsSource="{Binding Inputs}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Content="{Binding Label}"
+                                                Command="{Binding DataContext.SetInputCommand, RelativeSource={RelativeSource AncestorType=Border}}"
+                                                CommandParameter="{Binding}"
+                                                Style="{StaticResource InputButtonStyle}"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- No inputs configured message -->
+                            <TextBlock Text="No inputs configured. Click Configure to set up."
+                                       Foreground="Orange" FontStyle="Italic"
+                                       Margin="0,4,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Inputs.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Footer -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="Configure..."
+                    Command="{Binding ConfigureCommand}"
+                    Padding="16,6"/>
+        </StackPanel>
+    </Grid>
+</Window>
