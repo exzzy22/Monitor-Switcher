@@ -62,9 +62,9 @@ MonitorSwitcher uses the DDC/CI protocol (Display Data Channel / Command Interfa
 
 Configure window:
 
-![Configure window](images/ConfigureWindow.png)
+![Configure window](.github/images/ConfigureWindow.png)
 
 Main window:
 
-![Main window](images/MainWindow.png)
+![Main window](.github/images/MainWindow.png)
 
