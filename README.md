@@ -57,3 +57,14 @@ MonitorSwitcher uses the DDC/CI protocol (Display Data Channel / Command Interfa
 | Current input shows "unknown" | The monitor may be asleep or the DDC read timed out — input buttons still work |
 | Wrong input switches | VCP values differ by manufacturer — try different values in Configure |
 | Laptop screen appears | Use the **Hidden** checkbox in Configure to hide it from the main window |
+
+## Screenshots
+
+Configure window:
+
+![Configure window](images/ConfigureWindow.png)
+
+Main window:
+
+![Main window](images/MainWindow.png)
+

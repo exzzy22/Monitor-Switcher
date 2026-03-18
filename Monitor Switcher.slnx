@@ -2,8 +2,15 @@
   <Folder Name="/.github/">
     <File Path=".github/copilot-instructions.md" />
   </Folder>
+  <Folder Name="/.github/images/">
+    <File Path=".github/images/ConfigureWindow.png" />
+    <File Path=".github/images/MainWindow.png" />
+  </Folder>
   <Folder Name="/.github/workflows/">
     <File Path=".github/workflows/publish.yml" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="README.md" />
   </Folder>
   <Project Path="MonitorSwitcher/MonitorSwitcher.csproj" />
 </Solution>
