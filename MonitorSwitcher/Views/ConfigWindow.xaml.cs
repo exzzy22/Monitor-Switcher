@@ -65,13 +65,14 @@ public partial class ConfigWindow : Window
     {
         if (sender is Button btn && btn.Parent is StackPanel sp)
         {
-            var labelBox = sp.Children.OfType<TextBox>().FirstOrDefault(t => t.Name == "ManualLabel");
-            var vcpBox = sp.Children.OfType<TextBox>().FirstOrDefault(t => t.Name == "ManualVcp");
-            var monitorEntry = sp.Tag as ConfigMonitorEntry
-                ?? labelBox?.Tag as ConfigMonitorEntry
-                ?? vcpBox?.Tag as ConfigMonitorEntry;
+            var textBoxes = sp.Children.OfType<TextBox>().ToList();
+            if (textBoxes.Count < 2) return;
 
-            if (monitorEntry == null || labelBox == null || vcpBox == null)
+            var labelBox = textBoxes[0];
+            var vcpBox = textBoxes[1];
+            var monitorEntry = sp.Tag as ConfigMonitorEntry;
+
+            if (monitorEntry == null)
                 return;
 
             string label = labelBox.Text?.Trim() ?? string.Empty;

@@ -94,15 +94,14 @@
 
                                 <!-- Add input — manual VCP entry -->
                                 <StackPanel Orientation="Horizontal"
-                                            Margin="0,4,0,0">
+                                            Margin="0,4,0,0"
+                                            Tag="{Binding}">
                                     <TextBlock Text="Manual:" VerticalAlignment="Center"
                                                Margin="0,0,6,0" Width="42"/>
-                                    <TextBox x:Name="ManualLabel" Width="120"
-                                             Tag="{Binding}"
+                                    <TextBox Width="120"
                                              Margin="0,0,4,0"
                                              ToolTip="Label (e.g. HDMI-3)"/>
-                                    <TextBox x:Name="ManualVcp" Width="50"
-                                             Tag="{Binding}"
+                                    <TextBox Width="50"
                                              Margin="0,0,4,0"
                                              ToolTip="VCP value (0-255)"/>
                                     <Button Content="+ Add"
