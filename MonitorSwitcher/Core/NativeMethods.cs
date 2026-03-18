@@ -45,6 +45,16 @@ internal static class NativeMethods
     public static extern bool SetVCPFeature(
         IntPtr hPhysicalMonitor, byte bVCPCode, uint dwNewValue);
 
+    [DllImport("dxva2.dll")]
+    public static extern bool GetCapabilitiesStringLength(
+        IntPtr hPhysicalMonitor, out uint pdwCapabilitiesStringLengthInCharacters);
+
+    [DllImport("dxva2.dll")]
+    public static extern bool CapabilitiesRequestAndCapabilitiesReply(
+        IntPtr hPhysicalMonitor,
+        [Out] byte[] pszASCIICapabilitiesString,
+        uint dwCapabilitiesStringLengthInCharacters);
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     public struct MONITORINFOEX
     {

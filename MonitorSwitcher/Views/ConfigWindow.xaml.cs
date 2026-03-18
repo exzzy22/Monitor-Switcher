@@ -20,6 +20,7 @@ public partial class ConfigWindow : Window
         {
             DeviceName = m.DeviceName,
             DisplayName = m.DisplayName,
+            MonitorInfo = m.MonitorInfo,
             Inputs = new ObservableCollection<ConfigInputEntry>(
                 m.MonitorInfo.Inputs.Select(i => new ConfigInputEntry(i.Label, i.VcpValue)))
         }).ToList();
@@ -175,6 +176,48 @@ public partial class ConfigWindow : Window
         DialogResult = false;
         Close();
     }
+
+    private async void Detect_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is ConfigMonitorEntry monitorEntry
+            && monitorEntry.MonitorInfo != null)
+        {
+            fe.IsEnabled = false;
+            try
+            {
+                var values = await Task.Run(() =>
+                    MonitorService.DetectSupportedInputs(monitorEntry.MonitorInfo));
+
+                if (values.Count == 0)
+                {
+                    MessageBox.Show(
+                        "Could not detect supported inputs for this monitor.\nThe monitor may not support DDC/CI capabilities reporting.\nUse the preset dropdown or manual entry instead.",
+                        "Detection Failed", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // Add detected values that aren't already in the list
+                int added = 0;
+                foreach (var vcpValue in values)
+                {
+                    if (!monitorEntry.Inputs.Any(i => i.VcpValue == vcpValue))
+                    {
+                        string label = MonitorService.GetDefaultLabelForVcpValue(vcpValue);
+                        monitorEntry.Inputs.Add(new ConfigInputEntry(label, vcpValue));
+                        added++;
+                    }
+                }
+
+                MessageBox.Show(
+                    $"Detected {values.Count} supported input(s).\n{added} new input(s) added.\n\nYou can rename the labels before saving.",
+                    "Detection Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            finally
+            {
+                fe.IsEnabled = true;
+            }
+        }
+    }
 }
 
 public class InputPreset
@@ -221,6 +264,7 @@ public class ConfigMonitorEntry : INotifyPropertyChanged
     private string _displayName = string.Empty;
 
     public string DeviceName { get; set; } = string.Empty;
+    public MonitorInfo? MonitorInfo { get; set; }
 
     public string DisplayName
     {

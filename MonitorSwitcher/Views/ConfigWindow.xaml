@@ -39,9 +39,17 @@
                                              Width="300"/>
                                 </StackPanel>
 
-                                <!-- Inputs header -->
-                                <TextBlock Text="Inputs:" FontWeight="SemiBold"
-                                           Margin="0,0,0,4"/>
+                                <!-- Inputs header + detect button -->
+                                <DockPanel Margin="0,0,0,4">
+                                    <Button Content="&#x1f50d; Detect Inputs"
+                                            DockPanel.Dock="Right"
+                                            Tag="{Binding}"
+                                            Click="Detect_Click"
+                                            Padding="8,2"
+                                            ToolTip="Auto-detect supported inputs from the monitor via DDC/CI"/>
+                                    <TextBlock Text="Inputs:" FontWeight="SemiBold"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
 
                                 <!-- Input rows -->
                                 <ItemsControl ItemsSource="{Binding Inputs}">

@@ -8,10 +8,11 @@ using MonitorSwitcher.Views;
 
 namespace MonitorSwitcher.ViewModels;
 
-public class MainViewModel : INotifyPropertyChanged
+public class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private bool _isRefreshing;
     private bool _isTopMost;
+    private bool _disposed;
     private CancellationTokenSource? _refreshCts;
 
     public MainViewModel()
@@ -73,8 +74,11 @@ public class MainViewModel : INotifyPropertyChanged
 
     public async Task RefreshAsync()
     {
-        // Cancel any previous refresh
+        if (_disposed) return;
+
+        // Cancel and dispose any previous refresh
         _refreshCts?.Cancel();
+        _refreshCts?.Dispose();
         _refreshCts = new CancellationTokenSource();
         var token = _refreshCts.Token;
 
@@ -114,6 +118,8 @@ public class MainViewModel : INotifyPropertyChanged
     /// </summary>
     public async Task SilentReadInputsAsync()
     {
+        if (_disposed) return;
+
         foreach (var vm in Monitors.ToList())
         {
             if (vm.IsBusy) continue;
@@ -203,6 +209,14 @@ public class MainViewModel : INotifyPropertyChanged
                     .ToList();
             }
         }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _refreshCts?.Cancel();
+        _refreshCts?.Dispose();
+        _refreshCts = null;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

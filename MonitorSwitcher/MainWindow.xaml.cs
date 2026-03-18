@@ -7,6 +7,7 @@ namespace MonitorSwitcher;
 public partial class MainWindow : Window
 {
     private MainViewModel? _viewModel;
+    private HwndSource? _hwndSource;
 
     public MainWindow()
     {
@@ -20,8 +21,6 @@ public partial class MainWindow : Window
             await _viewModel.InitializeAsync();
         };
 
-        // Re-read actual input states when the window is reactivated
-        // (e.g. user switched monitor away and came back)
         Activated += async (_, _) =>
         {
             if (_viewModel != null && !_viewModel.IsRefreshing)
@@ -32,10 +31,17 @@ public partial class MainWindow : Window
 
         SourceInitialized += (_, _) =>
         {
-            // Hook WM_MOUSEACTIVATE so button clicks work without needing
-            // a separate click to focus the window first.
-            var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
-            source?.AddHook(WndProc);
+            _hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+            _hwndSource?.AddHook(WndProc);
+        };
+
+        Closed += (_, _) =>
+        {
+            _hwndSource?.RemoveHook(WndProc);
+            _hwndSource = null;
+
+            _viewModel?.Dispose();
+            _viewModel = null;
         };
     }
 
