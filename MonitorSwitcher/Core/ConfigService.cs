@@ -14,6 +14,9 @@ public class MonitorConfig
 
     [JsonPropertyName("inputs")]
     public List<InputConfig> Inputs { get; set; } = new();
+
+    [JsonPropertyName("isDisabled")]
+    public bool IsDisabled { get; set; }
 }
 
 public class InputConfig
@@ -33,8 +36,15 @@ public class AppConfig
 
 public static class ConfigService
 {
-    private static readonly string ConfigPath =
+    private static readonly string ConfigDir =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MonitorSwitcher");
+
+    private static readonly string ConfigPath = Path.Combine(ConfigDir, "config.json");
+
+    private static readonly string LegacyConfigPath =
         Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+
+    public static string ConfigFilePath => ConfigPath;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -46,6 +56,14 @@ public static class ConfigService
     {
         try
         {
+            // Migrate from legacy location if needed
+            if (!File.Exists(ConfigPath) && File.Exists(LegacyConfigPath))
+            {
+                Directory.CreateDirectory(ConfigDir);
+                File.Copy(LegacyConfigPath, ConfigPath);
+                try { File.Delete(LegacyConfigPath); } catch { }
+            }
+
             if (!File.Exists(ConfigPath))
                 return new List<MonitorConfig>();
 
@@ -64,6 +82,7 @@ public static class ConfigService
     {
         try
         {
+            Directory.CreateDirectory(ConfigDir);
             var appConfig = new AppConfig { Monitors = configs };
             string json = JsonSerializer.Serialize(appConfig, JsonOptions);
             File.WriteAllText(ConfigPath, json);
@@ -74,5 +93,5 @@ public static class ConfigService
         }
     }
 
-    public static bool ConfigExists() => File.Exists(ConfigPath);
+    public static bool ConfigExists() => File.Exists(ConfigPath) || File.Exists(LegacyConfigPath);
 }

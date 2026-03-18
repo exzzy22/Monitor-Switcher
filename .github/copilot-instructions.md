@@ -1,13 +1,13 @@
 # Copilot Instructions — MonitorSwitcher
 
-A lightweight, portable .NET 8 WPF desktop application that lets the user switch input
+A lightweight, portable .NET 10 WPF desktop application that lets the user switch input
 sources on DDC/CI-capable monitors. No installer, no admin rights required.
 
 ---
 
 ## Project Setup
 
-- **Framework:** .NET 8, WPF (`<UseWPF>true</UseWPF>`)
+- **Framework:** .NET 10, WPF (`<UseWPF>true</UseWPF>`)
 - **Target:** `win-x64`, self-contained single-file executable
 - **Publish flags:**
   ```
@@ -32,7 +32,7 @@ MonitorSwitcher/
 ├── Core/
 │   ├── MonitorInfo.cs          # Data model for a single monitor
 │   ├── MonitorService.cs       # Enumerates monitors, reads/writes DDC/CI
-│   ├── ConfigService.cs        # Load/save appsettings.json
+│   ├── ConfigService.cs        # Load/save config.json from Documents
 │   └── NativeMethods.cs        # All P/Invoke declarations
 ├── ViewModels/
 │   ├── MainViewModel.cs        # Top-level VM, owns ObservableCollection<MonitorViewModel>
@@ -41,7 +41,9 @@ MonitorSwitcher/
 │   └── RelayCommand.cs         # Minimal ICommand implementation
 ├── Views/
 │   ├── ConfigWindow.xaml        # Monitor configuration dialog
-│   └── ConfigWindow.xaml.cs
+│   ├── ConfigWindow.xaml.cs
+│   ├── IdentifyWindow.xaml      # Full-screen overlay to identify a monitor
+│   └── IdentifyWindow.xaml.cs
 └── Converters/
     └── BoolToVisibilityConverter.cs
 ```
@@ -171,6 +173,9 @@ public class MonitorInfo
 
     // User-configured list of available inputs for this monitor
     public List<InputEntry> Inputs { get; set; } = new();
+
+    // When true, this monitor is hidden from the main window
+    public bool IsDisabled { get; set; }
 }
 
 public class InputEntry
@@ -286,31 +291,43 @@ Allows the user to set up the input list for each monitor.
 ┌─────────────────────────────────────────────┐
 │  Configure Monitors                     [X]  │
 ├─────────────────────────────────────────────┤
-│  Monitor 1                                   │
-│  Name: [DELL U2722D          ]               │
-│  Inputs:                                     │
-│    Label      VCP Value   [Remove]           │
-│   [HDMI 1  ] [17        ] [  ✕  ]           │
-│   [HDMI 2  ] [18        ] [  ✕  ]           │
-│   [DisplayP] [15        ] [  ✕  ]           │
-│                           [+ Add Input]      │
+│  \\.\DISPLAY1              [🖥 Identify]     │
+│  Name: [DELL U2722D          ]  ☐ Hidden     │
+│  Inputs:                    [🔍 Detect]      │
+│   [HDMI 1  ] (VCP 17) [▲][▼] [  ✕  ]        │
+│   [HDMI 2  ] (VCP 18) [▲][▼] [  ✕  ]        │
+│   [DisplayP] (VCP 15) [▲][▼] [  ✕  ]        │
+│   Add: [preset dropdown] [+ Add]             │
+│   Manual: [label] [vcp] [+ Add]              │
 ├─────────────────────────────────────────────┤
 │  Monitor 2                                   │
 │  ... (same pattern)                          │
 ├─────────────────────────────────────────────┤
+│  Config: %DOCS%\MonitorSwitcher\config.json  │
 │                         [Cancel]  [Save]     │
 └─────────────────────────────────────────────┘
 ```
 
 - Edits are made on a **copy** of the config; only committed on Save.
 - VCP Value field: numeric `TextBox` with input validation (numbers only, 0–255).
-- On Save: write config to `appsettings.json` next to the exe (see Persistence below).
+- **Identify button**: shows a full-screen overlay on the monitor for 3 seconds
+  (like Windows display settings Identify). Implemented via `IdentifyWindow`.
+- **Hidden checkbox**: marks the monitor as disabled — it won't appear in the main
+  window. Useful for laptop screens that don't support DDC/CI.
+- **Config path**: shown at the bottom with an "Open Folder" button.
+- On Save: write config to `config.json` in Documents (see Persistence below).
 
 ---
 
-## Persistence — `appsettings.json`
+## Persistence — `config.json`
 
-Store configuration in a JSON file next to the executable. Use `System.Text.Json`.
+Store configuration in a JSON file in the user's Documents folder. Use `System.Text.Json`.
+
+- **Path:** `Path.Combine(Environment.GetFolderPath(SpecialFolder.MyDocuments), "MonitorSwitcher", "config.json")`
+- This avoids creating a visible config file next to the single-file exe.
+- On first load, migrates any existing `appsettings.json` from the exe directory
+  to the new location automatically.
+- Exposes `ConfigService.ConfigFilePath` (static property) for display in the UI.
 
 ```json
 {
@@ -318,6 +335,7 @@ Store configuration in a JSON file next to the executable. Use `System.Text.Json
     {
       "deviceName": "\\\\.\\DISPLAY1",
       "displayName": "DELL U2722D",
+      "isDisabled": false,
       "inputs": [
         { "label": "HDMI 1", "vcpValue": 17 },
         { "label": "HDMI 2", "vcpValue": 18 },
@@ -327,6 +345,7 @@ Store configuration in a JSON file next to the executable. Use `System.Text.Json
     {
       "deviceName": "\\\\.\\DISPLAY2",
       "displayName": "LG 27GP950",
+      "isDisabled": true,
       "inputs": [
         { "label": "HDMI", "vcpValue": 4 },
         { "label": "DisplayPort", "vcpValue": 15 }
@@ -339,7 +358,7 @@ Store configuration in a JSON file next to the executable. Use `System.Text.Json
 - Match saved monitors to detected monitors by `deviceName`.
 - If a monitor is detected but has no saved config, show it with an empty input list
   and prompt the user to configure it.
-- Path: `Path.Combine(AppContext.BaseDirectory, "appsettings.json")`
+- `isDisabled: true` hides the monitor from the main window.
 
 ---
 
@@ -365,11 +384,15 @@ Use a minimal MVVM approach — no MVVM framework needed.
 
 ## Persistence Service — `ConfigService.cs`
 
-Owns all `appsettings.json` I/O. Keeps `MonitorService` focused on DDC/CI only.
+Owns all `config.json` I/O. Keeps `MonitorService` focused on DDC/CI only.
 
 - `LoadConfig()` → `List<MonitorConfig>` — reads and deserializes the JSON file.
+  Automatically migrates legacy `appsettings.json` from the exe directory on first load.
 - `SaveConfig(List<MonitorConfig> configs)` — serializes and writes the JSON file.
-- Path: `Path.Combine(AppContext.BaseDirectory, "appsettings.json")`
+  Creates the `Documents/MonitorSwitcher/` directory if it doesn't exist.
+- `ConfigFilePath` (static property) — the full path to the config file, for display.
+- `ConfigExists()` — checks both new and legacy locations.
+- Path: `Path.Combine(Environment.GetFolderPath(SpecialFolder.MyDocuments), "MonitorSwitcher", "config.json")`
 - Uses `System.Text.Json` with `JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }`.
 
 ---
@@ -377,10 +400,12 @@ Owns all `appsettings.json` I/O. Keeps `MonitorService` focused on DDC/CI only.
 ## Startup Behavior
 
 1. On load, call `MonitorService.GetMonitors()` (synchronous is fine at startup).
-2. Load `appsettings.json` via `ConfigService` and merge saved config into monitor list.
-3. For each monitor, attempt to read current input via DDC on a background thread.
-4. Show the window — cards appear immediately, input states update as DDC reads complete.
-5. **First run (no `appsettings.json`):** detect all monitors and open the
+2. Load `config.json` via `ConfigService` and merge saved config into monitor list.
+3. `MainViewModel` stores all monitors in `_allMonitorViewModels`, but only adds
+   non-disabled monitors to the displayed `Monitors` collection.
+4. For each visible monitor, attempt to read current input via DDC on a background thread.
+5. Show the window — cards appear immediately, input states update as DDC reads complete.
+6. **First run (no `config.json`):** detect all monitors and open the
    `ConfigWindow` automatically so the user can set up inputs.
 
 ---
@@ -415,7 +440,10 @@ Owns all `appsettings.json` I/O. Keeps `MonitorService` focused on DDC/CI only.
 3. **DDC reads can take 200–500ms per monitor.** Always async / background thread.
 4. **VCP 0x60 values differ per brand.** Never hardcode; always user-configurable.
 5. **`GetVCPFeatureAndVCPFeatureReply` may return `true` but wrong values** if the monitor is off or in standby. Treat any value of 0 as "unknown."
-6. **Single-file publish extracts to a temp folder on first run.** `AppContext.BaseDirectory` points to the *original* exe location, which is correct for `appsettings.json`. Do not use `Assembly.Location` (it points to the temp extraction folder).
+6. **Single-file publish extracts to a temp folder on first run.** Config is stored in
+   `Documents/MonitorSwitcher/config.json`, not next to the exe, so single-file publish
+   doesn't create visible config files. Legacy `appsettings.json` is migrated on first load.
+   Do not use `Assembly.Location` (it points to the temp extraction folder).
 7. **WPF DPI awareness:** Add this to the `.csproj`:
    ```xml
    <ApplicationManifest>app.manifest</ApplicationManifest>

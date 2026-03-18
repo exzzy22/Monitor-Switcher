@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,11 +23,13 @@ public partial class ConfigWindow : Window
             DeviceName = m.DeviceName,
             DisplayName = m.DisplayName,
             MonitorInfo = m.MonitorInfo,
+            IsDisabled = m.MonitorInfo.IsDisabled,
             Inputs = new ObservableCollection<ConfigInputEntry>(
                 m.MonitorInfo.Inputs.Select(i => new ConfigInputEntry(i.Label, i.VcpValue)))
         }).ToList();
 
         MonitorList.ItemsSource = _entries;
+        ConfigPathText.Text = $"Config: {ConfigService.ConfigFilePath}";
     }
 
     private void AddInputCombo_Loaded(object sender, RoutedEventArgs e)
@@ -157,6 +161,7 @@ public partial class ConfigWindow : Window
         {
             DeviceName = entry.DeviceName,
             DisplayName = entry.DisplayName,
+            IsDisabled = entry.IsDisabled,
             Inputs = entry.Inputs
                 .Select(i => new InputConfig
                 {
@@ -218,6 +223,40 @@ public partial class ConfigWindow : Window
             }
         }
     }
+
+    private void Identify_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is ConfigMonitorEntry entry && entry.MonitorInfo != null)
+        {
+            var rect = MonitorService.GetMonitorRect(entry.MonitorInfo.HMonitor);
+            if (rect.Right == rect.Left && rect.Bottom == rect.Top)
+                return;
+
+            var source = PresentationSource.FromVisual(this);
+            double scaleX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            double scaleY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+
+            int index = _entries.IndexOf(entry) + 1;
+            var window = new IdentifyWindow(
+                index.ToString(),
+                entry.DisplayName,
+                rect.Left / scaleX,
+                rect.Top / scaleY,
+                (rect.Right - rect.Left) / scaleX,
+                (rect.Bottom - rect.Top) / scaleY);
+            window.Show();
+        }
+    }
+
+    private void OpenConfigFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dir = Path.GetDirectoryName(ConfigService.ConfigFilePath);
+        if (dir != null)
+        {
+            Directory.CreateDirectory(dir);
+            Process.Start("explorer.exe", dir);
+        }
+    }
 }
 
 public class InputPreset
@@ -262,6 +301,7 @@ public class InputPreset
 public class ConfigMonitorEntry : INotifyPropertyChanged
 {
     private string _displayName = string.Empty;
+    private bool _isDisabled;
 
     public string DeviceName { get; set; } = string.Empty;
     public MonitorInfo? MonitorInfo { get; set; }
@@ -274,6 +314,19 @@ public class ConfigMonitorEntry : INotifyPropertyChanged
             if (_displayName != value)
             {
                 _displayName = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool IsDisabled
+    {
+        get => _isDisabled;
+        set
+        {
+            if (_isDisabled != value)
+            {
+                _isDisabled = value;
                 OnPropertyChanged();
             }
         }

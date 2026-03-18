@@ -14,6 +14,7 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool _isTopMost;
     private bool _disposed;
     private CancellationTokenSource? _refreshCts;
+    private List<MonitorViewModel> _allMonitorViewModels = new();
 
     public MainViewModel()
     {
@@ -58,9 +59,13 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         var configs = ConfigService.LoadConfig();
         MergeConfig(monitors, configs);
 
+        _allMonitorViewModels.Clear();
         foreach (var m in monitors)
         {
-            Monitors.Add(new MonitorViewModel(m));
+            var vm = new MonitorViewModel(m);
+            _allMonitorViewModels.Add(vm);
+            if (!m.IsDisabled)
+                Monitors.Add(vm);
         }
 
         // First-run: open config window if no saved config
@@ -94,10 +99,14 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
 
             Application.Current.Dispatcher.Invoke(() =>
             {
+                _allMonitorViewModels.Clear();
                 Monitors.Clear();
                 foreach (var m in monitors)
                 {
-                    Monitors.Add(new MonitorViewModel(m));
+                    var vm = new MonitorViewModel(m);
+                    _allMonitorViewModels.Add(vm);
+                    if (!m.IsDisabled)
+                        Monitors.Add(vm);
                 }
             });
 
@@ -181,7 +190,7 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private void OpenConfigure()
     {
-        var configWindow = new ConfigWindow(Monitors.ToList());
+        var configWindow = new ConfigWindow(_allMonitorViewModels.ToList());
         configWindow.Owner = Application.Current.MainWindow;
         if (configWindow.ShowDialog() == true)
         {
@@ -207,6 +216,8 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
                 monitor.Inputs = config.Inputs
                     .Select(i => new InputEntry { Label = i.Label, VcpValue = i.VcpValue })
                     .ToList();
+
+                monitor.IsDisabled = config.IsDisabled;
             }
         }
     }

@@ -16,6 +16,16 @@
                     Click="Save_Click"/>
         </StackPanel>
 
+        <!-- Config file path -->
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <Button Content="Open Folder" DockPanel.Dock="Right"
+                    Click="OpenConfigFolder_Click"
+                    Padding="8,2" Margin="8,0,0,0"/>
+            <TextBlock x:Name="ConfigPathText"
+                       VerticalAlignment="Center" FontSize="11" Foreground="Gray"
+                       TextTrimming="CharacterEllipsis"/>
+        </DockPanel>
+
         <!-- Monitor list — scrollable -->
         <ScrollViewer VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
@@ -26,18 +36,34 @@
                                 CornerRadius="4" Margin="0,0,0,10" Padding="10">
                             <StackPanel>
                                 <!-- Monitor header -->
-                                <TextBlock Text="{Binding DeviceName}"
-                                           FontSize="10" Foreground="Gray"
-                                           Margin="0,0,0,4"/>
+                                    <DockPanel Margin="0,0,0,4">
+                                        <Button Content="🖥 Identify"
+                                                DockPanel.Dock="Right"
+                                                Tag="{Binding}"
+                                                Click="Identify_Click"
+                                                Padding="8,2"
+                                                ToolTip="Show an overlay on this monitor to identify it"/>
+                                        <TextBlock Text="{Binding DeviceName}"
+                                                   FontSize="10" Foreground="Gray"
+                                                   VerticalAlignment="Center"/>
+                                    </DockPanel>
 
-                                <!-- Display name -->
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                    <TextBlock Text="Name: "
-                                               VerticalAlignment="Center"
-                                               Margin="0,0,4,0"/>
-                                    <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
-                                             Width="300"/>
-                                </StackPanel>
+                                <!-- Display name + hidden toggle -->
+                                <DockPanel Margin="0,0,0,8">
+                                    <CheckBox Content="Hidden"
+                                              DockPanel.Dock="Right"
+                                              IsChecked="{Binding IsDisabled}"
+                                              VerticalAlignment="Center"
+                                              Margin="12,0,0,0"
+                                              ToolTip="Hide this monitor from the main window"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Name: "
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,4,0"/>
+                                        <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
+                                                 Width="260"/>
+                                    </StackPanel>
+                                </DockPanel>
 
                                 <!-- Inputs header + detect button -->
                                 <DockPanel Margin="0,0,0,4">

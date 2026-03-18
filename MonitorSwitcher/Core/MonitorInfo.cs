@@ -7,6 +7,7 @@ public class MonitorInfo
     public string DeviceName { get; set; } = string.Empty;
     public uint CurrentInput { get; set; }
     public List<InputEntry> Inputs { get; set; } = new();
+    public bool IsDisabled { get; set; }
 }
 
 public class InputEntry

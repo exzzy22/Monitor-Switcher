@@ -1,6 +1,9 @@
 <Solution>
-  <Folder Name="/Solution Items/">
+  <Folder Name="/.github/">
     <File Path=".github/copilot-instructions.md" />
+  </Folder>
+  <Folder Name="/.github/workflows/">
+    <File Path=".github/workflows/publish.yml" />
   </Folder>
   <Project Path="MonitorSwitcher/MonitorSwitcher.csproj" />
 </Solution>

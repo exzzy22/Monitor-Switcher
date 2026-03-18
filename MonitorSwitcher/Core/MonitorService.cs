@@ -341,4 +341,15 @@ public static class MonitorService
             ? label
             : $"Input {vcpValue}";
     }
+
+    internal static RECT GetMonitorRect(IntPtr hMonitor)
+    {
+        var info = new MONITORINFOEX();
+        info.cbSize = Marshal.SizeOf<MONITORINFOEX>();
+        if (GetMonitorInfo(hMonitor, ref info))
+        {
+            return info.rcMonitor;
+        }
+        return default;
+    }
 }
