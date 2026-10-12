@@ -17,6 +17,11 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
     private static readonly TimeSpan ActivationReadDelay = TimeSpan.FromMilliseconds(400);
 
     private readonly List<MonitorViewModel> _allMonitorViewModels = new();
+
+    // Inputs each monitor reported in its DDC/CI capabilities this session, by monitor id.
+    private readonly Dictionary<string, List<uint>> _detectedInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _detectionStarted = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly DispatcherTimer _displayChangeTimer;
     private AppConfig _config = new();
     private CancellationTokenSource? _refreshCts;
@@ -97,10 +102,12 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         _isInitialized = true;
         OnPropertyChanged(nameof(ShowNoMonitorsMessage));
 
-        if (firstRun)
-            OpenConfigure();
-
         await ReadAllInputsAsync(token);
+        await DetectInputsAsync();
+
+        // Inputs are detected automatically, so setup is only needed when a monitor didn't report them.
+        if (firstRun && Monitors.Any(m => m.IsConnected && m.Inputs.Count == 0))
+            OpenConfigure();
     }
 
     /// <summary>Re-enumerates monitors (handles plug/unplug) and re-reads their inputs.</summary>
@@ -111,6 +118,7 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
 
         var token = await ReloadMonitorsAsync();
         await ReadAllInputsAsync(token);
+        await DetectInputsAsync();
     }
 
     /// <summary>
@@ -161,7 +169,7 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
                     monitors.Add(vm.MonitorInfo.CloneAsDisconnected());
             }
 
-            if (MergeConfig(monitors, _config))
+            if (MergeConfig(monitors, _config, _detectedInputs))
                 ConfigService.TrySave(_config, out _);
 
             ApplyMonitors(monitors);
@@ -291,6 +299,53 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         await Task.WhenAll(Monitors.ToList().Select(vm => vm.ReadCurrentInputAsync(attempts: 1, quiet: true, CancellationToken.None)));
     }
 
+    /// <summary>
+    /// Asks each connected, visible monitor which inputs it has (once per session) and adds
+    /// any that aren't listed yet, so inputs don't have to be set up by hand.
+    /// </summary>
+    private async Task DetectInputsAsync()
+    {
+        var pending = _allMonitorViewModels
+            .Where(vm => vm.IsConnected && !vm.MonitorInfo.IsDisabled && _detectionStarted.Add(vm.Id))
+            .Select(vm => vm.MonitorInfo)
+            .ToList();
+        if (pending.Count == 0)
+            return;
+
+        // Each monitor has its own DDC/CI bus, so they can be queried in parallel.
+        var results = await Task.WhenAll(pending.Select(monitor => Task.Run(() =>
+        {
+            var status = MonitorService.DetectSupportedInputs(monitor, out var values);
+            return (Monitor: monitor, Status: status, Values: values);
+        })));
+
+        bool detectedAny = false;
+        foreach (var (monitor, status, values) in results)
+        {
+            if (status == DdcStatus.Ok && values.Count > 0)
+            {
+                _detectedInputs[monitor.Id] = values;
+                detectedAny = true;
+                continue;
+            }
+
+            Log.Warn($"Couldn't detect the inputs of {monitor.Name}: "
+                + (status == DdcStatus.Ok ? "its capabilities don't list any" : status.ToString()));
+
+            // Showing another device or busy right now; try again when it's back.
+            if (status is DdcStatus.NotConnected or DdcStatus.Busy)
+                _detectionStarted.Remove(monitor.Id);
+        }
+
+        if (!detectedAny || _disposed)
+            return;
+
+        var monitors = _allMonitorViewModels.Select(vm => vm.MonitorInfo).ToList();
+        if (MergeConfig(monitors, _config, _detectedInputs))
+            ConfigService.TrySave(_config, out _);
+        ApplyMonitors(monitors);
+    }
+
     private void OpenConfigure()
     {
         if (_isConfigOpen)
@@ -318,14 +373,17 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    /// Applies saved names, inputs and visibility to the detected monitors.
-    /// Returns true when the config was upgraded and should be saved.
+    /// Applies saved names, inputs and visibility to the detected monitors, and adds inputs
+    /// the monitors reported that aren't saved yet. Returns true when the config changed and
+    /// should be saved.
     /// </summary>
-    private static bool MergeConfig(List<MonitorInfo> monitors, AppConfig config)
+    private static bool MergeConfig(List<MonitorInfo> monitors, AppConfig config,
+        IReadOnlyDictionary<string, List<uint>> detectedInputs)
     {
         bool configChanged = false;
         var unmatchedConfigs = new List<MonitorConfig>(config.Monitors);
         var unmatchedMonitors = new List<MonitorInfo>();
+        var applied = new Dictionary<MonitorInfo, MonitorConfig>();
 
         // 1. By stable monitor id.
         foreach (var monitor in monitors)
@@ -394,19 +452,68 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
             unmatchedMonitors.Remove(monitor);
         }
 
+        // 4. Inputs the monitor reported that aren't saved yet, unless the user removed them.
+        foreach (var monitor in monitors.Where(m => m.IsConnected))
+        {
+            if (!detectedInputs.TryGetValue(monitor.Id, out var detected))
+                continue;
+
+            if (!applied.TryGetValue(monitor, out var monitorConfig))
+            {
+                monitorConfig = new MonitorConfig
+                {
+                    MonitorId = MonitorService.IsStableId(monitor.Id) ? monitor.Id : null,
+                    DeviceName = monitor.DeviceName,
+                };
+            }
+
+            var added = AddDetectedInputs(monitorConfig, detected);
+            if (added.Count == 0)
+                continue;
+
+            if (!config.Monitors.Contains(monitorConfig))
+                config.Monitors.Add(monitorConfig);
+            Apply(monitor, monitorConfig);
+            configChanged = true;
+            Log.Info($"Added inputs detected on {monitor.Name}: {string.Join(", ", added.Select(i => i.Label))}");
+        }
+
         return configChanged;
 
-        static void Apply(MonitorInfo monitor, MonitorConfig config)
+        void Apply(MonitorInfo monitor, MonitorConfig saved)
         {
-            if (!string.IsNullOrWhiteSpace(config.DisplayName))
-                monitor.Name = config.DisplayName;
+            applied[monitor] = saved;
 
-            monitor.Inputs = config.Inputs
+            if (!string.IsNullOrWhiteSpace(saved.DisplayName))
+                monitor.Name = saved.DisplayName;
+
+            monitor.Inputs = saved.Inputs
                 .Select(i => new InputEntry { Label = i.Label, VcpValue = i.VcpValue })
                 .ToList();
 
-            monitor.IsDisabled = config.IsDisabled;
+            monitor.RemovedInputs = saved.RemovedInputs?.ToList() ?? new List<uint>();
+            monitor.IsDisabled = saved.IsDisabled;
         }
+    }
+
+    /// <summary>
+    /// Adds detected VCP values the config doesn't list or the user hasn't removed, keeping
+    /// the order the monitor reports them in. Returns the added inputs.
+    /// </summary>
+    private static List<InputConfig> AddDetectedInputs(MonitorConfig config, List<uint> detected)
+    {
+        var added = new List<InputConfig>();
+        foreach (uint value in detected)
+        {
+            if (config.Inputs.Any(i => i.VcpValue == value) || config.RemovedInputs?.Contains(value) == true)
+                continue;
+
+            int index = MonitorService.GetDetectedInputIndex(config.Inputs.Select(i => i.VcpValue).ToList(), detected, value);
+            var input = new InputConfig { Label = MonitorService.GetDefaultLabelForVcpValue(value), VcpValue = value };
+            config.Inputs.Insert(index, input);
+            added.Add(input);
+        }
+        return added;
     }
 
     private static bool SameId(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);

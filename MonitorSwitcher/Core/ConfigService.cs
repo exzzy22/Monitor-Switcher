@@ -26,6 +26,10 @@ public class MonitorConfig
 
     [DataMember(Name = "isDisabled", Order = 4)]
     public bool IsDisabled { get; set; }
+
+    /// <summary>VCP values the user removed, so automatic detection doesn't add them back.</summary>
+    [DataMember(Name = "removedInputs", Order = 5, EmitDefaultValue = false)]
+    public List<uint>? RemovedInputs { get; set; }
 }
 
 [DataContract]

@@ -486,6 +486,17 @@ public static class MonitorService
     }
 
     /// <summary>
+    /// Where to insert a newly detected input so the list keeps the order the monitor reports:
+    /// before the first listed input the monitor reports after it, otherwise at the end.
+    /// </summary>
+    public static int GetDetectedInputIndex(List<uint> listed, List<uint> detected, uint value)
+    {
+        int position = detected.IndexOf(value);
+        int index = listed.FindIndex(v => detected.IndexOf(v) > position);
+        return index < 0 ? listed.Count : index;
+    }
+
+    /// <summary>
     /// Known MCCS standard labels for VCP 0x60 values.
     /// Monitors may use these differently, but it's a reasonable default label.
     /// </summary>

@@ -350,6 +350,9 @@ Allows the user to set up the input list for each monitor.
   (like Windows display settings Identify). Implemented via `IdentifyWindow`.
 - **Hidden checkbox**: marks the monitor as disabled — it won't appear in the main
   window. Useful for laptop screens that don't support DDC/CI.
+- **✕ on an input** removes it and records it in `removedInputs`, so automatic detection
+  doesn't add it back. **Detect Inputs** adds everything the monitor reports, including
+  removed inputs.
 - **Config path**: shown at the bottom with an "Open Folder" button.
 - **Presets section** (below the monitors): name + one dropdown per monitor
   ("Don't change" or one of that monitor's inputs; stays in sync as inputs are edited).
@@ -382,7 +385,8 @@ Store configuration in a JSON file in the user's Documents folder, via
         { "label": "DisplayPort-1", "vcpValue": 15 },
         { "label": "HDMI-2", "vcpValue": 18 }
       ],
-      "isDisabled": false
+      "isDisabled": false,
+      "removedInputs": [ 17 ]
     }
   ],
   "presets": [
@@ -400,8 +404,12 @@ Store configuration in a JSON file in the user's Documents folder, via
   have only `deviceName`: match those by `deviceName` once, then write the `monitorId`.
   If a `monitorId` no longer matches but exactly one detected monitor of the same model
   (the `DELA1F3` part) is unmatched, adopt it (cable moved to another port).
-- If a monitor is detected but has no saved config, show it with an empty input list
-  and prompt the user to configure it.
+- Inputs a monitor reports in its DDC/CI capabilities (read once per monitor per session)
+  are added to its saved list if missing, in the order the monitor reports them, creating
+  an entry for a monitor with no saved config. Values in `removedInputs` (inputs the user
+  removed in Configure) are skipped; adding an input again, or Detect Inputs, clears them.
+  Inputs the monitor doesn't report are never removed (manual values for monitors that
+  misreport).
 - `isDisabled: true` hides the monitor from the main window.
 - Preset targets reference monitors the same way (`monitorId`, else `deviceName`).
 
@@ -456,8 +464,11 @@ Owns all `config.json` I/O. Keeps `MonitorService` focused on DDC/CI only.
    non-disabled monitors to the displayed `Monitors` collection.
 4. For each visible monitor, attempt to read current input via DDC on a background thread.
 5. Show the window — cards appear immediately, input states update as DDC reads complete.
-6. **First run (no `config.json`):** detect all monitors and open the
-   `ConfigWindow` automatically so the user can set up inputs.
+6. Then read each connected monitor's capabilities (in parallel, once per monitor per
+   session; retried when a monitor that was switched away or busy comes back) and add
+   newly reported inputs to the config (see Persistence).
+7. **First run (no `config.json`):** open the `ConfigWindow` automatically only if a
+   monitor still has no inputs after detection.
 
 ---
 

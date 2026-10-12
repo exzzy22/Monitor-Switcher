@@ -21,6 +21,10 @@ public class MonitorInfo
 
     public uint CurrentInput { get; set; }
     public List<InputEntry> Inputs { get; set; } = new();
+
+    /// <summary>VCP values the user removed; automatic detection skips them.</summary>
+    public List<uint> RemovedInputs { get; set; } = new();
+
     public bool IsDisabled { get; set; }
 
     public MonitorInfo CloneAsDisconnected() => new()
@@ -32,6 +36,7 @@ public class MonitorInfo
         IsConnected = false,
         CurrentInput = CurrentInput,
         Inputs = Inputs.Select(i => new InputEntry { Label = i.Label, VcpValue = i.VcpValue }).ToList(),
+        RemovedInputs = RemovedInputs.ToList(),
         IsDisabled = IsDisabled,
     };
 }

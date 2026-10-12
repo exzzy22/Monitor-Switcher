@@ -75,7 +75,7 @@
                                                 Tag="{Binding}"
                                                 Click="Detect_Click"
                                                 Padding="8,2"
-                                                ToolTip="Auto-detect supported inputs from the monitor via DDC/CI"/>
+                                                ToolTip="Ask the monitor which inputs it has and add any that are missing, including ones you removed"/>
                                         <TextBlock Text="Inputs:" FontWeight="SemiBold"
                                                    VerticalAlignment="Center"/>
                                     </DockPanel>
@@ -109,7 +109,8 @@
                                                             Tag="{Binding}"
                                                             Click="RemoveInput_Click"
                                                             Padding="6,2"
-                                                            VerticalAlignment="Center"/>
+                                                            VerticalAlignment="Center"
+                                                            ToolTip="Remove. It won't be added back automatically; Detect Inputs restores it."/>
                                                 </StackPanel>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>

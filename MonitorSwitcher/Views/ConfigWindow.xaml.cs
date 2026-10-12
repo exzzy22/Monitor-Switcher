@@ -29,7 +29,8 @@ public partial class ConfigWindow : Window
             MonitorInfo = m.MonitorInfo,
             IsDisabled = m.MonitorInfo.IsDisabled,
             Inputs = new ObservableCollection<ConfigInputEntry>(
-                m.MonitorInfo.Inputs.Select(i => new ConfigInputEntry(i.Label, i.VcpValue)))
+                m.MonitorInfo.Inputs.Select(i => new ConfigInputEntry(i.Label, i.VcpValue))),
+            RemovedInputs = m.MonitorInfo.RemovedInputs.ToList(),
         }).ToList();
 
         _presets = new ObservableCollection<ConfigPresetEntry>(
@@ -66,7 +67,7 @@ public partial class ConfigWindow : Window
                     return;
                 }
 
-                monitorEntry.Inputs.Add(new ConfigInputEntry(preset.Label, preset.VcpValue));
+                monitorEntry.AddInput(preset.Label, preset.VcpValue);
                 combo.SelectedItem = null;
             }
             else
@@ -113,7 +114,7 @@ public partial class ConfigWindow : Window
                 return;
             }
 
-            monitorEntry.Inputs.Add(new ConfigInputEntry(label, vcpValue));
+            monitorEntry.AddInput(label, vcpValue);
             labelBox.Clear();
             vcpBox.Clear();
         }
@@ -136,7 +137,7 @@ public partial class ConfigWindow : Window
             {
                 if (entry.Inputs.Contains(input))
                 {
-                    entry.Inputs.Remove(input);
+                    entry.RemoveInput(input);
                     break;
                 }
             }
@@ -201,7 +202,8 @@ public partial class ConfigWindow : Window
                 {
                     Label = i.Label,
                     VcpValue = i.VcpValue
-                }).ToList()
+                }).ToList(),
+            RemovedInputs = entry.RemovedInputs.Count > 0 ? entry.RemovedInputs.ToList() : null,
         });
 
         // Keep settings for monitors that aren't listed here, e.g. one that's unplugged right now.
@@ -263,14 +265,15 @@ public partial class ConfigWindow : Window
                     return;
                 }
 
-                // Add detected values that aren't already in the list
+                // Add detected values that aren't already in the list, including removed ones.
                 int added = 0;
                 foreach (var vcpValue in values)
                 {
                     if (!monitorEntry.Inputs.Any(i => i.VcpValue == vcpValue))
                     {
-                        string label = MonitorService.GetDefaultLabelForVcpValue(vcpValue);
-                        monitorEntry.Inputs.Add(new ConfigInputEntry(label, vcpValue));
+                        int index = MonitorService.GetDetectedInputIndex(
+                            monitorEntry.Inputs.Select(i => i.VcpValue).ToList(), values, vcpValue);
+                        monitorEntry.AddInput(MonitorService.GetDefaultLabelForVcpValue(vcpValue), vcpValue, index);
                         added++;
                     }
                 }
@@ -390,6 +393,22 @@ public class ConfigMonitorEntry : INotifyPropertyChanged
     }
 
     public ObservableCollection<ConfigInputEntry> Inputs { get; set; } = new();
+
+    /// <summary>VCP values the user removed, which automatic detection won't add back.</summary>
+    public List<uint> RemovedInputs { get; set; } = new();
+
+    public void AddInput(string label, uint vcpValue, int index = -1)
+    {
+        Inputs.Insert(index < 0 ? Inputs.Count : index, new ConfigInputEntry(label, vcpValue));
+        RemovedInputs.Remove(vcpValue);
+    }
+
+    public void RemoveInput(ConfigInputEntry input)
+    {
+        Inputs.Remove(input);
+        if (!RemovedInputs.Contains(input.VcpValue))
+            RemovedInputs.Add(input.VcpValue);
+    }
 
     /// <summary>Whether a saved entry (by monitor id, or display name for old entries) refers to this monitor.</summary>
     public bool Represents(string? monitorId, string deviceName) =>
