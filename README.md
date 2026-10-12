@@ -1,20 +1,22 @@
 # MonitorSwitcher
 
-A lightweight, portable .NET WPF desktop application that lets you switch input sources on DDC/CI-capable monitors. No installer, no admin rights required.
+A lightweight, portable WPF desktop application that lets you switch input sources on DDC/CI-capable monitors. No installer, no admin rights required.
 
 ## Features
 
 - **Switch monitor inputs** (HDMI, DisplayPort, USB-C, etc.) with one click
+- **Presets** switch several monitors at once (e.g. all monitors to your laptop) — handy when the monitor the app is on is one of the ones switching
 - **Auto-detect** supported inputs via DDC/CI capabilities
 - **Configure** custom input labels and VCP values per monitor
 - **Identify monitors** with an on-screen overlay (like Windows display settings)
 - **Hide monitors** you don't need (e.g., laptop screens)
 - **Stay-on-top** mode for quick access
-- **Portable** single-file executable — no installation needed
+- **Follows display changes** — monitors that disconnect or reconnect are picked up automatically
+- **Portable** single small executable — no installation needed
 
 ## Requirements
 
-- Windows 10/11 (64-bit)
+- Windows 10 (version 1903 or later) or Windows 11 — these include .NET Framework 4.8, which the app uses
 - Monitors with DDC/CI support (most modern monitors)
 - No admin rights required
 
@@ -24,6 +26,7 @@ A lightweight, portable .NET WPF desktop application that lets you switch input 
 2. Run it from any folder
 3. On first launch, configure your monitors' inputs
 4. Click input buttons to switch sources
+5. Optionally add **Presets** in Configure to switch several monitors with one click
 
 ## Configuration
 
@@ -33,15 +36,15 @@ Configuration is stored in:
 %USERPROFILE%\Documents\MonitorSwitcher\config.json
 ```
 
-The config path is shown at the bottom of the Configure window with an **Open Folder** button for quick access.
+The config path is shown at the bottom of the Configure window with an **Open Folder** button for quick access. A diagnostic log, `monitor-switcher.log`, is kept in the same folder.
 
 ## Building
 
 ```bash
-dotnet publish MonitorSwitcher/MonitorSwitcher.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
+dotnet build MonitorSwitcher/MonitorSwitcher.csproj -c Release
 ```
 
-The output is a single `.exe` that runs from any folder.
+The output is `MonitorSwitcher/bin/Release/net48/MonitorSwitcher.exe`, a single small `.exe` that runs from any folder. Building needs only the .NET SDK (any recent version); it fetches the .NET Framework 4.8 reference assemblies automatically if Visual Studio's targeting pack isn't installed.
 
 ## How It Works
 
@@ -53,18 +56,24 @@ MonitorSwitcher uses the DDC/CI protocol (Display Data Channel / Command Interfa
 
 | Issue | Solution |
 |-------|---------|
-| Monitor shows "DDC not supported" | Your monitor may not support DDC/CI, or it may be disabled in the monitor's OSD settings |
+| Switching fails with a DDC/CI message | Your monitor may not support DDC/CI, or it may be disabled in the monitor's OSD settings |
 | Current input shows "unknown" | The monitor may be asleep or the DDC read timed out — input buttons still work |
+| Monitor shows "Not connected to this PC" | Windows dropped the monitor, usually because it's showing another device's input (common with DisplayPort). Windows can't reach it until it's switched back, so use the monitor's buttons or the other device |
 | Wrong input switches | VCP values differ by manufacturer — try different values in Configure |
 | Laptop screen appears | Use the **Hidden** checkbox in Configure to hide it from the main window |
+| Something else goes wrong | Check `monitor-switcher.log` next to `config.json` (**Open Folder** in Configure) |
 
 ## Screenshots
+
+Main window, with presets at the top:
+
+![Main window](.github/images/MainWindow.png)
 
 Configure window:
 
 ![Configure window](.github/images/ConfigureWindow.png)
 
-Main window:
+Setting up presets in the Configure window:
 
-![Main window](.github/images/MainWindow.png)
+![Configuring presets](.github/images/ConfigurePresets.png)
 

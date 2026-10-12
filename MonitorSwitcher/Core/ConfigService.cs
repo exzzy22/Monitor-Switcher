@@ -1,97 +1,224 @@
 using System.IO;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+using System.Text;
 
 namespace MonitorSwitcher.Core;
 
+[DataContract]
 public class MonitorConfig
 {
-    [JsonPropertyName("deviceName")]
+    /// <summary>
+    /// Stable monitor identity (Windows' monitor device path). Unlike <see cref="DeviceName"/>
+    /// it doesn't change when Windows renumbers displays. Missing in configs saved by older versions.
+    /// </summary>
+    [DataMember(Name = "monitorId", Order = 0, EmitDefaultValue = false)]
+    public string? MonitorId { get; set; }
+
+    [DataMember(Name = "deviceName", Order = 1)]
     public string DeviceName { get; set; } = string.Empty;
 
-    [JsonPropertyName("displayName")]
+    [DataMember(Name = "displayName", Order = 2)]
     public string DisplayName { get; set; } = string.Empty;
 
-    [JsonPropertyName("inputs")]
+    [DataMember(Name = "inputs", Order = 3)]
     public List<InputConfig> Inputs { get; set; } = new();
 
-    [JsonPropertyName("isDisabled")]
+    [DataMember(Name = "isDisabled", Order = 4)]
     public bool IsDisabled { get; set; }
 }
 
+[DataContract]
 public class InputConfig
 {
-    [JsonPropertyName("label")]
+    [DataMember(Name = "label", Order = 0)]
     public string Label { get; set; } = string.Empty;
 
-    [JsonPropertyName("vcpValue")]
+    [DataMember(Name = "vcpValue", Order = 1)]
     public uint VcpValue { get; set; }
 }
 
+/// <summary>A named set of inputs to switch several monitors to with one click.</summary>
+[DataContract]
+public class PresetConfig
+{
+    [DataMember(Name = "name", Order = 0)]
+    public string Name { get; set; } = string.Empty;
+
+    [DataMember(Name = "targets", Order = 1)]
+    public List<PresetTargetConfig> Targets { get; set; } = new();
+}
+
+[DataContract]
+public class PresetTargetConfig
+{
+    [DataMember(Name = "monitorId", Order = 0, EmitDefaultValue = false)]
+    public string? MonitorId { get; set; }
+
+    [DataMember(Name = "deviceName", Order = 1)]
+    public string DeviceName { get; set; } = string.Empty;
+
+    [DataMember(Name = "vcpValue", Order = 2)]
+    public uint VcpValue { get; set; }
+}
+
+[DataContract]
 public class AppConfig
 {
-    [JsonPropertyName("monitors")]
+    [DataMember(Name = "alwaysOnTop", Order = 0)]
+    public bool AlwaysOnTop { get; set; }
+
+    [DataMember(Name = "monitors", Order = 1)]
     public List<MonitorConfig> Monitors { get; set; } = new();
+
+    [DataMember(Name = "presets", Order = 2)]
+    public List<PresetConfig> Presets { get; set; } = new();
 }
 
 public static class ConfigService
 {
-    private static readonly string ConfigDir =
+    private static readonly object Gate = new();
+
+    public static string ConfigDirectory { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MonitorSwitcher");
 
-    private static readonly string ConfigPath = Path.Combine(ConfigDir, "config.json");
+    public static string ConfigFilePath { get; } = Path.Combine(ConfigDirectory, "config.json");
 
     private static readonly string LegacyConfigPath =
-        Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
 
-    public static string ConfigFilePath => ConfigPath;
+    public static bool ConfigExists() => File.Exists(ConfigFilePath) || File.Exists(LegacyConfigPath);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    public static AppConfig Load()
     {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
-    public static List<MonitorConfig> LoadConfig()
-    {
-        try
+        lock (Gate)
         {
-            // Migrate from legacy location if needed
-            if (!File.Exists(ConfigPath) && File.Exists(LegacyConfigPath))
+            try
             {
-                Directory.CreateDirectory(ConfigDir);
-                File.Copy(LegacyConfigPath, ConfigPath);
-                try { File.Delete(LegacyConfigPath); } catch { }
+                MigrateLegacyConfig();
+
+                if (!File.Exists(ConfigFilePath))
+                    return new AppConfig();
+
+                using var stream = new MemoryStream(File.ReadAllBytes(ConfigFilePath));
+                var config = (AppConfig?)CreateSerializer().ReadObject(stream);
+                return Normalize(config ?? new AppConfig());
             }
-
-            if (!File.Exists(ConfigPath))
-                return new List<MonitorConfig>();
-
-            string json = File.ReadAllText(ConfigPath);
-            var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions);
-            return config?.Monitors ?? new List<MonitorConfig>();
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.WriteLine($"ConfigService.LoadConfig error: {ex.Message}");
-            return new List<MonitorConfig>();
+            catch (SerializationException ex)
+            {
+                // Keep the unreadable file for the user instead of silently overwriting it later.
+                Log.Error($"{ConfigFilePath} is not valid JSON, starting with an empty config", ex);
+                TryBackUpInvalidConfig();
+                return new AppConfig();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Could not read {ConfigFilePath}", ex);
+                return new AppConfig();
+            }
         }
     }
 
-    public static void SaveConfig(List<MonitorConfig> configs)
+    /// <summary>Saves the config; returns false and a user-facing reason on failure.</summary>
+    public static bool TrySave(AppConfig config, out string? error)
+    {
+        lock (Gate)
+        {
+            try
+            {
+                Directory.CreateDirectory(ConfigDirectory);
+
+                // Write to a temp file first so a failure mid-write can't corrupt the config.
+                string tempPath = ConfigFilePath + ".tmp";
+                using (var stream = File.Create(tempPath))
+                using (var writer = JsonReaderWriterFactory.CreateJsonWriter(
+                           stream, new UTF8Encoding(false), ownsStream: false, indent: true, indentChars: "  "))
+                {
+                    CreateSerializer().WriteObject(writer, config);
+                    writer.Flush();
+                }
+
+                ReplaceWithRetry(tempPath, ConfigFilePath);
+                error = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Could not save {ConfigFilePath}", ex);
+                error = ex.Message;
+                return false;
+            }
+        }
+    }
+
+    private static DataContractJsonSerializer CreateSerializer() => new(typeof(AppConfig));
+
+    private static void ReplaceWithRetry(string source, string destination)
+    {
+        // Antivirus or sync tools can briefly lock the file; give them a moment.
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Copy(source, destination, overwrite: true);
+                File.Delete(source);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(150 * attempt);
+            }
+        }
+    }
+
+    private static void MigrateLegacyConfig()
+    {
+        if (File.Exists(ConfigFilePath) || !File.Exists(LegacyConfigPath))
+            return;
+
+        Directory.CreateDirectory(ConfigDirectory);
+        File.Copy(LegacyConfigPath, ConfigFilePath);
+        try { File.Delete(LegacyConfigPath); } catch { }
+        Log.Info($"Migrated {LegacyConfigPath} to {ConfigFilePath}");
+    }
+
+    private static void TryBackUpInvalidConfig()
     {
         try
         {
-            Directory.CreateDirectory(ConfigDir);
-            var appConfig = new AppConfig { Monitors = configs };
-            string json = JsonSerializer.Serialize(appConfig, JsonOptions);
-            File.WriteAllText(ConfigPath, json);
+            File.Copy(ConfigFilePath, Path.Combine(ConfigDirectory, "config.invalid.json"), overwrite: true);
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Trace.WriteLine($"ConfigService.SaveConfig error: {ex.Message}");
+            Log.Error("Could not back up the invalid config", ex);
         }
     }
 
-    public static bool ConfigExists() => File.Exists(ConfigPath) || File.Exists(LegacyConfigPath);
+    // The serializer doesn't run constructors or initializers, so fill in anything the file left out.
+    private static AppConfig Normalize(AppConfig config)
+    {
+        config.Monitors ??= new List<MonitorConfig>();
+        config.Monitors.RemoveAll(m => m == null);
+        foreach (var monitor in config.Monitors)
+        {
+            monitor.DeviceName ??= string.Empty;
+            monitor.DisplayName ??= string.Empty;
+            monitor.Inputs ??= new List<InputConfig>();
+            monitor.Inputs.RemoveAll(i => i == null);
+            foreach (var input in monitor.Inputs)
+                input.Label ??= string.Empty;
+        }
+
+        config.Presets ??= new List<PresetConfig>();
+        config.Presets.RemoveAll(p => p == null);
+        foreach (var preset in config.Presets)
+        {
+            preset.Name ??= string.Empty;
+            preset.Targets ??= new List<PresetTargetConfig>();
+            preset.Targets.RemoveAll(t => t == null);
+            foreach (var target in preset.Targets)
+                target.DeviceName ??= string.Empty;
+        }
+        return config;
+    }
 }

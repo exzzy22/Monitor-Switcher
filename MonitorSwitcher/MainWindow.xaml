@@ -42,7 +42,7 @@
                                 <Setter Property="Foreground" Value="White"/>
                                 <Setter Property="FontWeight" Value="Bold"/>
                             </DataTrigger>
-                            <!-- Disabled (busy) -->
+                            <!-- Disabled (switching, or monitor not connected) -->
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="Bd" Property="Opacity" Value="0.6"/>
                                 <Setter Property="Cursor" Value="Arrow"/>
@@ -53,11 +53,13 @@
             </Setter>
         </Style>
 
-        <!-- Stay on Top toggle button style -->
-        <Style x:Key="TopMostToggleStyle" TargetType="Button">
-            <Setter Property="Padding" Value="8,4"/>
+        <!-- Small square header button (refresh, stay on top) -->
+        <Style x:Key="HeaderButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="28"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="ToolTip" Value="Stay on top"/>
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="13"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -65,18 +67,19 @@
                                 Background="#E8E8E8"
                                 BorderBrush="#CCCCCC"
                                 BorderThickness="1"
-                                CornerRadius="4"
-                                Padding="{TemplateBinding Padding}">
-                            <TextBlock x:Name="Icon" Text="📌" FontSize="13"/>
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="#D0D0D0"/>
                             </Trigger>
-                            <DataTrigger Binding="{Binding IsTopMost}" Value="True">
+                            <Trigger Property="Tag" Value="Active">
                                 <Setter TargetName="Bd" Property="Background" Value="#2979FF"/>
                                 <Setter TargetName="Bd" Property="BorderBrush" Value="#1565C0"/>
-                            </DataTrigger>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -87,6 +90,7 @@
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -95,16 +99,90 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,8">
             <Button Command="{Binding ToggleTopMostCommand}"
                     DockPanel.Dock="Right"
-                    Style="{StaticResource TopMostToggleStyle}"
+                    Content="&#xE718;"
+                    ToolTip="Stay on top"
                     Margin="4,0,0,0"
-                    VerticalAlignment="Center"/>
+                    VerticalAlignment="Center">
+                <Button.Style>
+                    <Style TargetType="Button" BasedOn="{StaticResource HeaderButtonStyle}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsTopMost}" Value="True">
+                                <Setter Property="Tag" Value="Active"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+            <Button Command="{Binding RefreshCommand}"
+                    DockPanel.Dock="Right"
+                    Style="{StaticResource HeaderButtonStyle}"
+                    ToolTip="Refresh monitors and current inputs"
+                    Margin="4,0,0,0"
+                    VerticalAlignment="Center">
+                <TextBlock Text="&#xE72C;" RenderTransformOrigin="0.5,0.5">
+                    <TextBlock.RenderTransform>
+                        <RotateTransform/>
+                    </TextBlock.RenderTransform>
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsRefreshing}" Value="True">
+                                    <DataTrigger.EnterActions>
+                                        <BeginStoryboard x:Name="SpinRefreshIcon">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                                 From="0" To="360" Duration="0:0:1"
+                                                                 RepeatBehavior="Forever"/>
+                                            </Storyboard>
+                                        </BeginStoryboard>
+                                    </DataTrigger.EnterActions>
+                                    <DataTrigger.ExitActions>
+                                        <StopStoryboard BeginStoryboardName="SpinRefreshIcon"/>
+                                    </DataTrigger.ExitActions>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Button>
             <TextBlock Text="Monitors"
                        FontSize="18" FontWeight="SemiBold"
                        VerticalAlignment="Center"/>
         </DockPanel>
 
+        <!-- Presets: switch several monitors with one click -->
+        <Border Grid.Row="1"
+                BorderBrush="#DDDDDD" BorderThickness="1"
+                CornerRadius="6" Margin="0,0,0,8" Padding="12,10,12,6"
+                Visibility="{Binding HasPresets, Converter={StaticResource BoolToVisibility}}">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="6" ShadowDepth="1"
+                                  Opacity="0.15" Color="Black"/>
+            </Border.Effect>
+            <StackPanel>
+                <TextBlock Text="Presets"
+                           FontSize="14" FontWeight="SemiBold"
+                           Margin="0,0,0,6"/>
+                <ItemsControl ItemsSource="{Binding Presets}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Content="{Binding Label}"
+                                    Command="{Binding ApplyCommand}"
+                                    ToolTip="{Binding ToolTip}"
+                                    Style="{StaticResource InputButtonStyle}"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
         <!-- Monitor cards -->
-        <ItemsControl Grid.Row="1"
+        <ItemsControl Grid.Row="2"
                       ItemsSource="{Binding Monitors}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
@@ -120,6 +198,7 @@
                             <!-- Monitor name -->
                             <TextBlock Text="{Binding DisplayName}"
                                        FontSize="14" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"
                                        Margin="0,0,0,4"/>
 
                             <!-- Current input -->
@@ -128,13 +207,10 @@
                                            Foreground="Gray"/>
                                 <TextBlock Text="{Binding CurrentInputLabel}"
                                            FontWeight="Medium"/>
+                                <TextBlock Text="  ·  switching…"
+                                           FontStyle="Italic" Foreground="#FF6600"
+                                           Visibility="{Binding IsSwitching, Converter={StaticResource BoolToVisibility}}"/>
                             </StackPanel>
-
-                            <!-- Busy indicator -->
-                            <TextBlock Text="⏳ Working..."
-                                       FontStyle="Italic" Foreground="#FF6600"
-                                       Margin="0,0,0,4"
-                                       Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}"/>
 
                             <!-- Input buttons -->
                             <ItemsControl ItemsSource="{Binding Inputs}">
@@ -146,7 +222,7 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Content="{Binding Label}"
-                                                Command="{Binding DataContext.SetInputCommand, RelativeSource={RelativeSource AncestorType=Border}}"
+                                                Command="{Binding DataContext.SetInputCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                 CommandParameter="{Binding}"
                                                 Style="{StaticResource InputButtonStyle}"/>
                                     </DataTemplate>
@@ -168,14 +244,26 @@
                                     </Style>
                                 </TextBlock.Style>
                             </TextBlock>
+
+                            <!-- Last error / connection status -->
+                            <TextBlock Text="{Binding StatusMessage}"
+                                       TextWrapping="Wrap"
+                                       Foreground="#C62828"
+                                       Margin="0,4,0,0"
+                                       Visibility="{Binding HasStatusMessage, Converter={StaticResource BoolToVisibility}}"/>
                         </StackPanel>
                     </Border>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
+        <TextBlock Grid.Row="2"
+                   Text="No monitors to show. Click refresh, or open Configure to un-hide monitors."
+                   TextWrapping="Wrap" Foreground="Gray" Margin="0,8"
+                   Visibility="{Binding ShowNoMonitorsMessage, Converter={StaticResource BoolToVisibility}}"/>
+
         <!-- Footer -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal"
+        <StackPanel Grid.Row="3" Orientation="Horizontal"
                     HorizontalAlignment="Right" Margin="0,8,0,0">
             <Button Content="Configure..."
                     Command="{Binding ConfigureCommand}"

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -13,6 +14,7 @@ namespace MonitorSwitcher.Views;
 public partial class ConfigWindow : Window
 {
     private readonly List<ConfigMonitorEntry> _entries;
+    private readonly ObservableCollection<ConfigPresetEntry> _presets;
 
     public ConfigWindow(List<MonitorViewModel> monitors)
     {
@@ -20,17 +22,26 @@ public partial class ConfigWindow : Window
 
         _entries = monitors.Select(m => new ConfigMonitorEntry
         {
+            Id = m.Id,
             DeviceName = m.DeviceName,
             DisplayName = m.DisplayName,
+            IsConnected = m.IsConnected,
             MonitorInfo = m.MonitorInfo,
             IsDisabled = m.MonitorInfo.IsDisabled,
             Inputs = new ObservableCollection<ConfigInputEntry>(
                 m.MonitorInfo.Inputs.Select(i => new ConfigInputEntry(i.Label, i.VcpValue)))
         }).ToList();
 
+        _presets = new ObservableCollection<ConfigPresetEntry>(
+            ConfigService.Load().Presets.Select(p => new ConfigPresetEntry(p.Name, _entries, p)));
+
         MonitorList.ItemsSource = _entries;
+        PresetList.ItemsSource = _presets;
         ConfigPathText.Text = $"Config: {ConfigService.ConfigFilePath}";
     }
+
+    /// <summary>The config that was saved, when the dialog closes with Save.</summary>
+    public AppConfig? SavedConfig { get; private set; }
 
     private void AddInputCombo_Loaded(object sender, RoutedEventArgs e)
     {
@@ -40,7 +51,7 @@ public partial class ConfigWindow : Window
         }
     }
 
-    private void AddPreset_Click(object sender, RoutedEventArgs e)
+    private void AddInputPreset_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button btn && btn.Parent is StackPanel sp)
         {
@@ -88,9 +99,9 @@ public partial class ConfigWindow : Window
                 return;
             }
 
-            if (!uint.TryParse(vcpBox.Text, out uint vcpValue) || vcpValue > 255)
+            if (!TryParseVcpValue(vcpBox.Text, out uint vcpValue))
             {
-                MessageBox.Show("VCP value must be a number between 0 and 255.",
+                MessageBox.Show("VCP value must be a number between 0 and 255 (hex like 0x0F also works).",
                     "Invalid Value", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -106,6 +117,15 @@ public partial class ConfigWindow : Window
             labelBox.Clear();
             vcpBox.Clear();
         }
+    }
+
+    private static bool TryParseVcpValue(string? text, out uint value)
+    {
+        text = text?.Trim() ?? string.Empty;
+        bool parsed = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? uint.TryParse(text.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value)
+            : uint.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value);
+        return parsed && value <= 255;
     }
 
     private void RemoveInput_Click(object sender, RoutedEventArgs e)
@@ -155,12 +175,26 @@ public partial class ConfigWindow : Window
         }
     }
 
+    private void AddSwitchPreset_Click(object sender, RoutedEventArgs e)
+    {
+        _presets.Add(new ConfigPresetEntry($"Preset {_presets.Count + 1}", _entries, source: null));
+    }
+
+    private void RemoveSwitchPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is ConfigPresetEntry preset)
+            _presets.Remove(preset);
+    }
+
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        var configs = _entries.Select(entry => new MonitorConfig
+        var config = ConfigService.Load();
+
+        var edited = _entries.Select(entry => new MonitorConfig
         {
+            MonitorId = entry.StableId,
             DeviceName = entry.DeviceName,
-            DisplayName = entry.DisplayName,
+            DisplayName = entry.DisplayName.Trim(),
             IsDisabled = entry.IsDisabled,
             Inputs = entry.Inputs
                 .Select(i => new InputConfig
@@ -168,18 +202,42 @@ public partial class ConfigWindow : Window
                     Label = i.Label,
                     VcpValue = i.VcpValue
                 }).ToList()
+        });
+
+        // Keep settings for monitors that aren't listed here, e.g. one that's unplugged right now.
+        var notListed = config.Monitors.Where(c => !_entries.Any(entry => entry.Represents(c.MonitorId, c.DeviceName)));
+        config.Monitors = edited.Concat(notListed).ToList();
+
+        config.Presets = _presets.Select((preset, index) => new PresetConfig
+        {
+            Name = string.IsNullOrWhiteSpace(preset.Name) ? $"Preset {index + 1}" : preset.Name.Trim(),
+            Targets = preset.Targets
+                .Where(t => t.VcpValue.HasValue)
+                .Select(t => new PresetTargetConfig
+                {
+                    MonitorId = t.Monitor.StableId,
+                    DeviceName = t.Monitor.DeviceName,
+                    VcpValue = t.VcpValue!.Value,
+                })
+                .Concat(preset.Source?.Targets.Where(t => !_entries.Any(entry => entry.Represents(t.MonitorId, t.DeviceName)))
+                        ?? Enumerable.Empty<PresetTargetConfig>())
+                .ToList(),
         }).ToList();
 
-        ConfigService.SaveConfig(configs);
+        if (!ConfigService.TrySave(config, out string? error))
+        {
+            MessageBox.Show($"Couldn't save the configuration:\n\n{error}\n\n{ConfigService.ConfigFilePath}",
+                "Save Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
 
+        SavedConfig = config;
         DialogResult = true;
-        Close();
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
         DialogResult = false;
-        Close();
     }
 
     private async void Detect_Click(object sender, RoutedEventArgs e)
@@ -187,16 +245,20 @@ public partial class ConfigWindow : Window
         if (sender is FrameworkElement fe && fe.Tag is ConfigMonitorEntry monitorEntry
             && monitorEntry.MonitorInfo != null)
         {
+            var monitor = monitorEntry.MonitorInfo;
             fe.IsEnabled = false;
             try
             {
-                var values = await Task.Run(() =>
-                    MonitorService.DetectSupportedInputs(monitorEntry.MonitorInfo));
+                List<uint> values = new();
+                var status = await Task.Run(() => MonitorService.DetectSupportedInputs(monitor, out values));
 
-                if (values.Count == 0)
+                if (status != DdcStatus.Ok || values.Count == 0)
                 {
+                    string reason = status == DdcStatus.NotConnected
+                        ? "This monitor isn't connected to this PC right now."
+                        : "Could not detect supported inputs for this monitor.\nThe monitor may not support DDC/CI capabilities reporting.";
                     MessageBox.Show(
-                        "Could not detect supported inputs for this monitor.\nThe monitor may not support DDC/CI capabilities reporting.\nUse the preset dropdown or manual entry instead.",
+                        $"{reason}\nUse the dropdown or manual entry instead.",
                         "Detection Failed", MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -228,34 +290,22 @@ public partial class ConfigWindow : Window
     {
         if (sender is FrameworkElement fe && fe.Tag is ConfigMonitorEntry entry && entry.MonitorInfo != null)
         {
-            var rect = MonitorService.GetMonitorRect(entry.MonitorInfo.HMonitor);
-            if (rect.Right == rect.Left && rect.Bottom == rect.Top)
+            if (!MonitorService.TryGetMonitorBounds(entry.MonitorInfo, out var bounds) || bounds.Width <= 0 || bounds.Height <= 0)
+            {
+                MessageBox.Show("This monitor isn't connected to this PC right now.",
+                    "Identify", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
-
-            var source = PresentationSource.FromVisual(this);
-            double scaleX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            double scaleY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+            }
 
             int index = _entries.IndexOf(entry) + 1;
-            var window = new IdentifyWindow(
-                index.ToString(),
-                entry.DisplayName,
-                rect.Left / scaleX,
-                rect.Top / scaleY,
-                (rect.Right - rect.Left) / scaleX,
-                (rect.Bottom - rect.Top) / scaleY);
-            window.Show();
+            new IdentifyWindow(index.ToString(), entry.DisplayName, bounds).Show();
         }
     }
 
     private void OpenConfigFolder_Click(object sender, RoutedEventArgs e)
     {
-        var dir = Path.GetDirectoryName(ConfigService.ConfigFilePath);
-        if (dir != null)
-        {
-            Directory.CreateDirectory(dir);
-            Process.Start("explorer.exe", dir);
-        }
+        Directory.CreateDirectory(ConfigService.ConfigDirectory);
+        Process.Start("explorer.exe", ConfigService.ConfigDirectory);
     }
 }
 
@@ -303,8 +353,15 @@ public class ConfigMonitorEntry : INotifyPropertyChanged
     private string _displayName = string.Empty;
     private bool _isDisabled;
 
+    public string Id { get; set; } = string.Empty;
     public string DeviceName { get; set; } = string.Empty;
+    public bool IsConnected { get; set; } = true;
     public MonitorInfo? MonitorInfo { get; set; }
+
+    public string HeaderText => IsConnected ? DeviceName : $"{DeviceName}  (not connected)";
+
+    /// <summary>The id to save, or null when only the display name identifies the monitor.</summary>
+    public string? StableId => MonitorService.IsStableId(Id) ? Id : null;
 
     public string DisplayName
     {
@@ -333,6 +390,12 @@ public class ConfigMonitorEntry : INotifyPropertyChanged
     }
 
     public ObservableCollection<ConfigInputEntry> Inputs { get; set; } = new();
+
+    /// <summary>Whether a saved entry (by monitor id, or display name for old entries) refers to this monitor.</summary>
+    public bool Represents(string? monitorId, string deviceName) =>
+        !string.IsNullOrEmpty(monitorId)
+            ? string.Equals(monitorId, Id, StringComparison.OrdinalIgnoreCase)
+            : string.Equals(deviceName, DeviceName, StringComparison.OrdinalIgnoreCase);
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -363,6 +426,101 @@ public class ConfigInputEntry : INotifyPropertyChanged
     {
         _label = label;
         VcpValue = vcpValue;
+    }
+
+    // Name read by screen readers in the preset dropdowns.
+    public override string ToString() => Label;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    protected void OnPropertyChanged([CallerMemberName] string? name = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+public class ConfigPresetEntry : INotifyPropertyChanged
+{
+    private string _name;
+
+    public ConfigPresetEntry(string name, IEnumerable<ConfigMonitorEntry> monitors, PresetConfig? source)
+    {
+        _name = name;
+        Source = source;
+        Targets = new ObservableCollection<ConfigPresetTarget>(monitors.Select(monitor =>
+            new ConfigPresetTarget(monitor,
+                source?.Targets.FirstOrDefault(t => monitor.Represents(t.MonitorId, t.DeviceName))?.VcpValue)));
+    }
+
+    /// <summary>The saved preset this was loaded from, to keep targets for monitors not shown.</summary>
+    public PresetConfig? Source { get; }
+
+    public ObservableCollection<ConfigPresetTarget> Targets { get; }
+
+    public string Name
+    {
+        get => _name;
+        set
+        {
+            if (_name != value)
+            {
+                _name = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    protected void OnPropertyChanged([CallerMemberName] string? name = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+/// <summary>One monitor's choice within a preset: one of its inputs, or "Don't change".</summary>
+public class ConfigPresetTarget : INotifyPropertyChanged
+{
+    public static readonly DontChangeOption DontChange = new();
+
+    private object? _selected;
+
+    public ConfigPresetTarget(ConfigMonitorEntry monitor, uint? vcpValue)
+    {
+        Monitor = monitor;
+        RebuildOptions(vcpValue);
+
+        // Keep the choices in sync while inputs are added or removed in this window.
+        monitor.Inputs.CollectionChanged += (_, _) => RebuildOptions(VcpValue);
+    }
+
+    public ConfigMonitorEntry Monitor { get; }
+    public ObservableCollection<object> Options { get; } = new();
+
+    public object? Selected
+    {
+        get => _selected;
+        set
+        {
+            if (_selected != value)
+            {
+                _selected = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public uint? VcpValue => (Selected as ConfigInputEntry)?.VcpValue;
+
+    private void RebuildOptions(uint? keepVcpValue)
+    {
+        Options.Clear();
+        Options.Add(DontChange);
+        foreach (var input in Monitor.Inputs)
+            Options.Add(input);
+
+        Selected = (object?)Monitor.Inputs.FirstOrDefault(i => i.VcpValue == keepVcpValue) ?? DontChange;
+    }
+
+    public class DontChangeOption
+    {
+        public string Label => "Don't change";
+
+        public override string ToString() => Label;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

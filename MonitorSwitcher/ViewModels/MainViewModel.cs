@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using MonitorSwitcher.Core;
 using MonitorSwitcher.Views;
 
@@ -10,35 +11,62 @@ namespace MonitorSwitcher.ViewModels;
 
 public class MainViewModel : INotifyPropertyChanged, IDisposable
 {
+    private static readonly TimeSpan ActivationReadInterval = TimeSpan.FromSeconds(2);
+
+    // Gives a click that activated the window time to send its switch before we read.
+    private static readonly TimeSpan ActivationReadDelay = TimeSpan.FromMilliseconds(400);
+
+    private readonly List<MonitorViewModel> _allMonitorViewModels = new();
+    private readonly DispatcherTimer _displayChangeTimer;
+    private AppConfig _config = new();
+    private CancellationTokenSource? _refreshCts;
+    private DateTime _lastActivationReadUtc = DateTime.MinValue;
+    private bool _isInitialized;
     private bool _isRefreshing;
     private bool _isTopMost;
+    private bool _isConfigOpen;
     private bool _disposed;
-    private CancellationTokenSource? _refreshCts;
-    private List<MonitorViewModel> _allMonitorViewModels = new();
 
     public MainViewModel()
     {
         Monitors = new ObservableCollection<MonitorViewModel>();
+        Presets = new ObservableCollection<PresetViewModel>();
+        RefreshCommand = new RelayCommand(() => _ = RefreshAsync());
         ConfigureCommand = new RelayCommand(OpenConfigure);
         ToggleTopMostCommand = new RelayCommand(() => IsTopMost = !IsTopMost);
+
+        // Windows sends several display-change messages while monitors come and go;
+        // wait for them to settle before re-enumerating.
+        _displayChangeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        _displayChangeTimer.Tick += (_, _) =>
+        {
+            _displayChangeTimer.Stop();
+            _ = RefreshAsync();
+        };
     }
 
     public ObservableCollection<MonitorViewModel> Monitors { get; }
+    public ObservableCollection<PresetViewModel> Presets { get; }
+    public bool HasPresets => Presets.Count > 0;
+    public ICommand RefreshCommand { get; }
     public ICommand ConfigureCommand { get; }
     public ICommand ToggleTopMostCommand { get; }
 
     public bool IsRefreshing
     {
         get => _isRefreshing;
-        set
+        private set
         {
             if (_isRefreshing != value)
             {
                 _isRefreshing = value;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(ShowNoMonitorsMessage));
             }
         }
     }
+
+    public bool ShowNoMonitorsMessage => _isInitialized && !IsRefreshing && Monitors.Count == 0;
 
     public bool IsTopMost
     {
@@ -49,184 +77,345 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
             {
                 _isTopMost = value;
                 OnPropertyChanged();
+
+                _config.AlwaysOnTop = value;
+                ConfigService.TrySave(_config, out _);
             }
         }
     }
 
     public async Task InitializeAsync()
     {
-        var monitors = MonitorService.GetMonitors();
-        var configs = ConfigService.LoadConfig();
-        MergeConfig(monitors, configs);
+        _config = await Task.Run(() => ConfigService.Load());
+        bool firstRun = !ConfigService.ConfigExists();
 
-        _allMonitorViewModels.Clear();
-        foreach (var m in monitors)
-        {
-            var vm = new MonitorViewModel(m);
-            _allMonitorViewModels.Add(vm);
-            if (!m.IsDisabled)
-                Monitors.Add(vm);
-        }
+        _isTopMost = _config.AlwaysOnTop;
+        OnPropertyChanged(nameof(IsTopMost));
+        LoadPresets();
 
-        // First-run: open config window if no saved config
-        if (!ConfigService.ConfigExists())
-        {
+        var token = await ReloadMonitorsAsync();
+        _isInitialized = true;
+        OnPropertyChanged(nameof(ShowNoMonitorsMessage));
+
+        if (firstRun)
             OpenConfigure();
-        }
 
-        await ReadAllInputsAsync();
+        await ReadAllInputsAsync(token);
     }
 
+    /// <summary>Re-enumerates monitors (handles plug/unplug) and re-reads their inputs.</summary>
     public async Task RefreshAsync()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
 
-        // Cancel and dispose any previous refresh
+        var token = await ReloadMonitorsAsync();
+        await ReadAllInputsAsync(token);
+    }
+
+    /// <summary>
+    /// Re-reads current inputs when the window is activated, to pick up changes made
+    /// elsewhere (monitor buttons, another PC, auto input select).
+    /// </summary>
+    public void OnWindowActivated()
+    {
+        if (_disposed || !_isInitialized || IsRefreshing || _isConfigOpen)
+            return;
+
+        var now = DateTime.UtcNow;
+        if (now - _lastActivationReadUtc < ActivationReadInterval)
+            return;
+        _lastActivationReadUtc = now;
+
+        _ = ReadInputsQuietlyAsync();
+    }
+
+    /// <summary>Called when Windows reports a display change or the PC resumes from sleep.</summary>
+    public void OnDisplaySettingsChanged()
+    {
+        if (_disposed)
+            return;
+
+        _displayChangeTimer.Stop();
+        _displayChangeTimer.Start();
+    }
+
+    private async Task<CancellationToken> ReloadMonitorsAsync()
+    {
         _refreshCts?.Cancel();
-        _refreshCts?.Dispose();
-        _refreshCts = new CancellationTokenSource();
-        var token = _refreshCts.Token;
+        var cts = new CancellationTokenSource();
+        _refreshCts = cts;
 
         IsRefreshing = true;
         try
         {
-            // Re-enumerate monitors
-            var monitors = await Task.Run(() => MonitorService.GetMonitors(), token);
-            if (token.IsCancellationRequested) return;
+            var monitors = await Task.Run(() => MonitorService.GetMonitors());
+            if (cts.IsCancellationRequested)
+                return cts.Token;
 
-            var configs = ConfigService.LoadConfig();
-            MergeConfig(monitors, configs);
-
-            Application.Current.Dispatcher.Invoke(() =>
+            // Keep showing monitors that disappeared while the app was open, so it's clear
+            // why they can't be switched (typically a DisplayPort monitor on another source).
+            foreach (var vm in _allMonitorViewModels)
             {
-                _allMonitorViewModels.Clear();
-                Monitors.Clear();
-                foreach (var m in monitors)
-                {
-                    var vm = new MonitorViewModel(m);
-                    _allMonitorViewModels.Add(vm);
-                    if (!m.IsDisabled)
-                        Monitors.Add(vm);
-                }
-            });
+                if (!monitors.Exists(m => SameId(m.Id, vm.Id)))
+                    monitors.Add(vm.MonitorInfo.CloneAsDisconnected());
+            }
 
-            if (token.IsCancellationRequested) return;
+            if (MergeConfig(monitors, _config))
+                ConfigService.TrySave(_config, out _);
 
-            await ReadAllInputsAsync(token);
+            ApplyMonitors(monitors);
+            Log.Info("Monitors: " + string.Join("; ", monitors.Select(m =>
+                $"{m.Name} [{m.DeviceName}{(m.IsConnected ? "" : ", not connected")}]")));
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Refreshing monitors failed", ex);
         }
         finally
         {
-            IsRefreshing = false;
+            if (_refreshCts == cts)
+                IsRefreshing = false;
+        }
+
+        return cts.Token;
+    }
+
+    private void ApplyMonitors(List<MonitorInfo> monitors)
+    {
+        var previous = new List<MonitorViewModel>(_allMonitorViewModels);
+        _allMonitorViewModels.Clear();
+
+        foreach (var info in monitors)
+        {
+            var vm = previous.Find(v => SameId(v.Id, info.Id));
+            if (vm != null)
+            {
+                vm.Update(info);
+            }
+            else
+            {
+                vm = new MonitorViewModel(info);
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MonitorViewModel.CurrentInput))
+                        UpdatePresetStates();
+                };
+            }
+            _allMonitorViewModels.Add(vm);
+        }
+
+        var visible = _allMonitorViewModels.Where(vm => !vm.MonitorInfo.IsDisabled).ToList();
+        if (!visible.SequenceEqual(Monitors))
+        {
+            Monitors.Clear();
+            foreach (var vm in visible)
+                Monitors.Add(vm);
+        }
+
+        OnPropertyChanged(nameof(ShowNoMonitorsMessage));
+        UpdatePresetStates();
+    }
+
+    private void LoadPresets()
+    {
+        Presets.Clear();
+        foreach (var preset in _config.Presets.Where(p => p.Targets.Count > 0))
+            Presets.Add(new PresetViewModel(preset, p => _ = ApplyPresetAsync(p)));
+
+        OnPropertyChanged(nameof(HasPresets));
+        UpdatePresetStates();
+    }
+
+    private async Task ApplyPresetAsync(PresetViewModel preset)
+    {
+        Log.Info($"Applying preset \"{preset.Label}\"");
+        var switches = new List<Task>();
+
+        foreach (var target in preset.Config.Targets)
+        {
+            var vm = FindMonitor(target);
+            if (vm == null)
+            {
+                Log.Warn($"Preset \"{preset.Label}\": monitor {target.MonitorId ?? target.DeviceName} isn't connected");
+                continue;
+            }
+
+            // Send every command right away rather than one after another: once one
+            // monitor switches away, Windows may rearrange displays, which can briefly
+            // disrupt talking to the others.
+            switches.Add(vm.SwitchToAsync(target.VcpValue));
+        }
+
+        await Task.WhenAll(switches);
+    }
+
+    private void UpdatePresetStates()
+    {
+        foreach (var preset in Presets)
+        {
+            preset.IsActive = preset.Config.Targets.All(target =>
+                FindMonitor(target) is { IsConnected: true } vm && vm.CurrentInput == target.VcpValue);
         }
     }
 
-    /// <summary>
-    /// Lightweight re-read of current inputs without re-enumerating monitors.
-    /// Called when the window regains focus to pick up any changes
-    /// (e.g. monitor auto-switched back to an active signal).
-    /// </summary>
-    public async Task SilentReadInputsAsync()
+    private MonitorViewModel? FindMonitor(PresetTargetConfig target) =>
+        _allMonitorViewModels.Find(vm => !string.IsNullOrEmpty(target.MonitorId)
+            ? SameId(vm.Id, target.MonitorId)
+            : string.Equals(vm.DeviceName, target.DeviceName, StringComparison.OrdinalIgnoreCase));
+
+    private async Task ReadAllInputsAsync(CancellationToken token)
     {
-        if (_disposed) return;
+        if (token.IsCancellationRequested)
+            return;
 
-        foreach (var vm in Monitors.ToList())
+        IsRefreshing = true;
+        try
         {
-            if (vm.IsBusy) continue;
-
-            try
-            {
-                var monitor = vm.MonitorInfo;
-                uint input = await Task.Run(() => MonitorService.ReadCurrentInput(monitor));
-
-                if (input != 0)
-                {
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        vm.CurrentInput = input;
-                    });
-                }
-            }
-            catch
-            {
-                // Silently ignore — this is a best-effort refresh
-            }
+            // Each monitor has its own DDC/CI bus, so they can be read in parallel.
+            await Task.WhenAll(Monitors.ToList().Select(vm => vm.ReadCurrentInputAsync(attempts: 2, quiet: false, token)));
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+                IsRefreshing = false;
         }
     }
 
-    private async Task ReadAllInputsAsync(CancellationToken token = default)
+    private async Task ReadInputsQuietlyAsync()
     {
-        foreach (var vm in Monitors.ToList())
-        {
-            if (token.IsCancellationRequested) return;
+        await Task.Delay(ActivationReadDelay);
+        if (_disposed || IsRefreshing)
+            return;
 
-            vm.IsBusy = true;
-            try
-            {
-                var monitor = vm.MonitorInfo;
-                uint input = 0;
-
-                // Retry a few times — monitor may not respond immediately
-                for (int attempt = 0; attempt < 3; attempt++)
-                {
-                    if (token.IsCancellationRequested) return;
-                    input = await Task.Run(() => MonitorService.ReadCurrentInput(monitor), token);
-                    if (input != 0) break;
-                    await Task.Delay(300, token);
-                }
-
-                if (token.IsCancellationRequested) return;
-
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    vm.CurrentInput = input;
-                });
-            }
-            finally
-            {
-                vm.IsBusy = false;
-            }
-        }
+        await Task.WhenAll(Monitors.ToList().Select(vm => vm.ReadCurrentInputAsync(attempts: 1, quiet: true, CancellationToken.None)));
     }
 
     private void OpenConfigure()
     {
-        var configWindow = new ConfigWindow(_allMonitorViewModels.ToList());
-        configWindow.Owner = Application.Current.MainWindow;
-        if (configWindow.ShowDialog() == true)
-        {
-            // Reload after config change
-            _ = RefreshAsync();
-        }
-    }
+        if (_isConfigOpen)
+            return;
 
-    private static void MergeConfig(List<MonitorInfo> monitors, List<MonitorConfig> configs)
-    {
-        foreach (var monitor in monitors)
+        _isConfigOpen = true;
+        try
         {
-            var config = configs.Find(c =>
-                string.Equals(c.DeviceName, monitor.DeviceName, StringComparison.OrdinalIgnoreCase));
-
-            if (config != null)
+            var configWindow = new ConfigWindow(_allMonitorViewModels.ToList())
             {
-                if (!string.IsNullOrWhiteSpace(config.DisplayName))
-                {
-                    monitor.Name = config.DisplayName;
-                }
+                Owner = Application.Current.MainWindow,
+            };
 
-                monitor.Inputs = config.Inputs
-                    .Select(i => new InputEntry { Label = i.Label, VcpValue = i.VcpValue })
-                    .ToList();
-
-                monitor.IsDisabled = config.IsDisabled;
+            if (configWindow.ShowDialog() == true && configWindow.SavedConfig != null)
+            {
+                _config = configWindow.SavedConfig;
+                LoadPresets();
+                _ = RefreshAsync();
             }
         }
+        finally
+        {
+            _isConfigOpen = false;
+        }
     }
+
+    /// <summary>
+    /// Applies saved names, inputs and visibility to the detected monitors.
+    /// Returns true when the config was upgraded and should be saved.
+    /// </summary>
+    private static bool MergeConfig(List<MonitorInfo> monitors, AppConfig config)
+    {
+        bool configChanged = false;
+        var unmatchedConfigs = new List<MonitorConfig>(config.Monitors);
+        var unmatchedMonitors = new List<MonitorInfo>();
+
+        // 1. By stable monitor id.
+        foreach (var monitor in monitors)
+        {
+            var match = unmatchedConfigs.Find(c => !string.IsNullOrEmpty(c.MonitorId) && SameId(c.MonitorId, monitor.Id));
+            if (match != null)
+            {
+                Apply(monitor, match);
+                unmatchedConfigs.Remove(match);
+            }
+            else
+            {
+                unmatchedMonitors.Add(monitor);
+            }
+        }
+
+        // 2. Entries saved by older versions only have the display name (\\.\DISPLAY1).
+        //    Match them once and record the monitor id, which survives display renumbering.
+        foreach (var monitor in unmatchedMonitors.Where(m => m.IsConnected).ToList())
+        {
+            var match = unmatchedConfigs.Find(c => string.IsNullOrEmpty(c.MonitorId)
+                && string.Equals(c.DeviceName, monitor.DeviceName, StringComparison.OrdinalIgnoreCase));
+            if (match == null)
+                continue;
+
+            if (MonitorService.IsStableId(monitor.Id))
+            {
+                foreach (var target in config.Presets.SelectMany(p => p.Targets)
+                             .Where(t => string.IsNullOrEmpty(t.MonitorId)
+                                 && string.Equals(t.DeviceName, monitor.DeviceName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    target.MonitorId = monitor.Id;
+                }
+                match.MonitorId = monitor.Id;
+                configChanged = true;
+            }
+            Apply(monitor, match);
+            unmatchedConfigs.Remove(match);
+            unmatchedMonitors.Remove(monitor);
+        }
+
+        // 3. Same monitor model on a different port (cable moved), when that's unambiguous.
+        foreach (var monitor in unmatchedMonitors.Where(m => m.IsConnected).ToList())
+        {
+            string hardwareId = MonitorService.GetHardwareId(monitor.Id);
+            if (hardwareId.Length == 0
+                || unmatchedMonitors.Count(m => m.IsConnected && MonitorService.GetHardwareId(m.Id) == hardwareId) != 1)
+            {
+                continue;
+            }
+
+            var candidates = unmatchedConfigs.Where(c => MonitorService.GetHardwareId(c.MonitorId) == hardwareId).ToList();
+            if (candidates.Count != 1)
+                continue;
+
+            foreach (var target in config.Presets.SelectMany(p => p.Targets).Where(t => SameId(t.MonitorId, candidates[0].MonitorId)))
+            {
+                target.MonitorId = monitor.Id;
+                target.DeviceName = monitor.DeviceName;
+            }
+            candidates[0].MonitorId = monitor.Id;
+            candidates[0].DeviceName = monitor.DeviceName;
+            configChanged = true;
+            Apply(monitor, candidates[0]);
+            unmatchedConfigs.Remove(candidates[0]);
+            unmatchedMonitors.Remove(monitor);
+        }
+
+        return configChanged;
+
+        static void Apply(MonitorInfo monitor, MonitorConfig config)
+        {
+            if (!string.IsNullOrWhiteSpace(config.DisplayName))
+                monitor.Name = config.DisplayName;
+
+            monitor.Inputs = config.Inputs
+                .Select(i => new InputEntry { Label = i.Label, VcpValue = i.VcpValue })
+                .ToList();
+
+            monitor.IsDisabled = config.IsDisabled;
+        }
+    }
+
+    private static bool SameId(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
     public void Dispose()
     {
         _disposed = true;
+        _displayChangeTimer.Stop();
         _refreshCts?.Cancel();
-        _refreshCts?.Dispose();
         _refreshCts = null;
     }
 

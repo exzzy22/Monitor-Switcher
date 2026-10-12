@@ -16,13 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
-      - name: Publish
-        run: dotnet publish MonitorSwitcher/MonitorSwitcher.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
+      # Targets .NET Framework 4.8 (built into Windows), so the output is a single small exe.
+      - name: Build
+        run: dotnet build MonitorSwitcher/MonitorSwitcher.csproj -c Release
 
       - name: Get short commit SHA
         id: vars
@@ -34,4 +35,4 @@ jobs:
         with:
           tag_name: ${{ steps.vars.outputs.short_sha }}
           name: Build ${{ steps.vars.outputs.short_sha }}
-          files: MonitorSwitcher/bin/Release/net10.0-windows/win-x64/publish/MonitorSwitcher.exe
+          files: MonitorSwitcher/bin/Release/net48/MonitorSwitcher.exe

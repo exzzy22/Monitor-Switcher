@@ -2,23 +2,26 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- .NET Framework 4.8 ships with Windows 10 (1903+) and Windows 11, so the exe is a small
+         single file that runs without installing anything and without unpacking native
+         libraries to %TEMP% on startup (which failed whenever temp cleanup interfered). -->
+    <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <!-- Produce a self-contained single-file executable for the specified RID -->
-    <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
-    <!-- Ensure native libraries are available when using single-file (they may be extracted) -->
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <!-- Disable trimming for WPF app to avoid runtime issues -->
-    <PublishTrimmed>false</PublishTrimmed>
+    <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
 
-  <!-- Disable generation of PDBs for Release publishes to keep publish folder clean -->
+  <ItemGroup>
+    <!-- DataContractJsonSerializer, used for config.json -->
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+  <!-- Keep the Release output to just the exe -->
   <PropertyGroup Condition="'$(Configuration)'=='Release'">
     <DebugType>None</DebugType>
     <DebugSymbols>false</DebugSymbols>
